@@ -1,0 +1,246 @@
+"""Regression tests for the website/provider boundary (no external credentials)."""
+from __future__ import annotations
+
+import json
+from datetime import date
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from fieldshift.api.app import app
+from fieldshift.v3 import appeears, gee, pipeline
+from fieldshift.v3.dates import evidence_dates
+from fieldshift.v3.diagnostics import safe_error
+from fieldshift.v3.models import RemoteDay
+
+START, END = date(2025, 1, 1), date(2025, 1, 15)
+PRODUCTS = [
+    {"ProductAndVersion": "SPL4SMGP.008", "TemporalExtentStart": "2015-03-31", "TemporalExtentEnd": "Present"},
+    {"ProductAndVersion": "MOD16A2GF.061", "TemporalExtentStart": "2001-01-01", "TemporalExtentEnd": "2025-12-31"},
+    {"ProductAndVersion": "MOD16A2.061", "TemporalExtentStart": "2001-01-01", "TemporalExtentEnd": "Present"},
+    {"ProductAndVersion": "HLSS30_VI.020", "TemporalExtentStart": "2015-11-28", "TemporalExtentEnd": "Present"},
+]
+LAYERS = {
+    "SPL4SMGP.008": {"Geophysical_Data_sm_surface": {}, "Geophysical_Data_sm_rootzone": {}},
+    "MOD16A2GF.061": {"ET_500m": {}, "ET_QC_500m": {}},
+    "MOD16A2.061": {"ET_500m": {}, "ET_QC_500m": {}},
+    "HLSS30_VI.020": {"NDVI": {}, "EVI": {}},
+}
+CSVS = {
+    "smap": b"Date,SPL4SMGP_008_Geophysical_Data_sm_surface,SPL4SMGP_008_Geophysical_Data_sm_rootzone\n2025-01-01T03:00:00Z,0.2,0.3\n",
+    "modis_et": b"Date,MOD16A2GF_061_ET_500m,MOD16A2GF_061_ET_QC_500m\n2025-01-01,16,0\n",
+    "hls_vi": b"Date,HLSS30_VI_020_NDVI,HLSS30_VI_020_EVI\n2025-01-01,0.6,0.4\n",
+}
+
+
+class NASAService:
+    def __init__(self, failure=None, pending=False):
+        self.failure, self.pending = failure, pending
+        self.tasks, self.payloads = {}, []
+
+    def request(self, path, **kwargs):
+        if path == "login":
+            return {"token": "mock-token"}
+        if path == "product":
+            return PRODUCTS
+        if path.startswith("product/"):
+            return LAYERS[path.split("/")[1]]
+        if path.startswith("task?"):
+            return list(self.tasks.values())
+        if path == "task":
+            body = kwargs["payload"]
+            self.payloads.append(body)
+            key = body["task_name"].split("-")[2]
+            if key == self.failure:
+                raise appeears.AppEEARSDataError("AppEEARS returned HTTP 400: product request rejected")
+            self.tasks[key] = {**body, "task_id": key, "status": "pending" if self.pending else "done"}
+            return self.tasks[key]
+        if path.startswith("task/"):
+            return self.tasks[path.split("/")[1]]
+        if path.startswith("bundle/"):
+            key = path.split("/")[1]
+            return {"files": [{"file_name": f"{key}.csv", "file_type": "csv", "file_id": key}]}
+        raise AssertionError(path)
+
+    def download(self, path, *args):
+        return CSVS[path.split("/")[-1]]
+
+
+@pytest.fixture
+def nasa(monkeypatch):
+    service = NASAService()
+    monkeypatch.setenv("FIELD_SHIFT_APPEEARS_USER", "mock-user")
+    monkeypatch.setenv("FIELD_SHIFT_APPEEARS_PASSWORD", "mock-password")
+    monkeypatch.delenv("FIELD_SHIFT_APPEEARS_TOKEN", raising=False)
+    appeears._clear_token()
+    monkeypatch.setattr(appeears, "_safe_json_request", service.request)
+    monkeypatch.setattr(appeears, "_download", service.download)
+    return service
+
+
+def test_three_independent_tasks_parse_namespaced_smap_and_cache(nasa, tmp_path):
+    first = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path)
+    assert {d["status"] for d in first.datasets} == {"available"}
+    assert len(nasa.payloads) == 3
+    assert all(len({l["product"] for l in p["params"]["layers"]}) == 1 for p in nasa.payloads)
+    assert any(r.smap_rootzone_m3_m3 == 0.3 for r in first.remote)
+    cached = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path)
+    assert len(nasa.payloads) == 3
+    assert {d["retrieval_mode"] for d in cached.datasets} == {"cache"}
+
+
+def test_failed_smap_does_not_remove_hls_or_modis(nasa, tmp_path):
+    nasa.failure = "smap"
+    result = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path)
+    statuses = {d["name"]: d["status"] for d in result.datasets}
+    assert statuses == {"NASA SMAP": "unavailable", "NASA MODIS MOD16": "available", "NASA HLS": "available"}
+    assert "HTTP 400" in result.datasets[0]["error"]
+
+
+def test_pending_tasks_resume_after_serverless_cache_loss(nasa, tmp_path):
+    nasa.pending = True
+    first = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path / "cold1")
+    assert {d["status"] for d in first.datasets} == {"pending"}
+    assert all("resumes" in d["coverage"] for d in first.datasets)
+    for task in nasa.tasks.values():
+        task["status"] = "done"
+    second = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path / "cold2")
+    assert len(nasa.payloads) == 3
+    assert {d["status"] for d in second.datasets} == {"available"}
+
+
+def test_date_aware_modis_selection_avoids_expired_gap_filled_product(nasa):
+    selected = appeears.discover_layers("mock", source_key="modis_et", start=date(2026, 1, 1), end=date(2026, 1, 15))
+    assert {s.product for s in selected} == {"MOD16A2.061"}
+
+
+def test_modis_sensor_bit_and_short_year_end_composite():
+    selected = tuple(appeears.LayerSelection("modis_et", "NASA MODIS MOD16", "MOD16A2.061", layer, target, None, None)
+                     for layer, target in [("ET_500m", "modis_et_mm"), ("ET_QC_500m", "modis_et_qc")])
+    raw = b"Date,ET_500m,ET_QC_500m\n2025-12-27,10,2\n"
+    rows = appeears._records_from_csv_files([("modis.csv", raw)], selected, "test", date(2025, 12, 1), date(2025, 12, 31))
+    assert rows[0].modis_et_mm == 2 and rows[0].modis_et_period_days == 5
+
+
+def test_gpm_has_one_evidence_entry_when_appeears_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: (RemoteDay(START, gpm_rain_mm=4),))
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+    gpm = [r for r in records if r["name"] == "NASA GPM IMERG"]
+    assert len(gpm) == 1 and gpm[0]["status"] == "partial"
+
+
+@pytest.mark.parametrize("start,end", [("2025-02-30", "2025-03-01"), ("2025-02-01", "2025-01-01"),
+                                       ("2024-01-01", "2025-01-01"), ("2025-01-01", None),
+                                       ("2099-01-01", "2099-01-02")])
+def test_bad_date_ranges_are_client_errors(start, end):
+    response = TestClient(app).post("/api/analysis/run", json={"start_date": start, "end_date": end})
+    assert response.status_code == 400
+
+
+def test_custom_dates_reach_both_providers_and_fill_plan_calendar(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIELD_SHIFT_LIVE_NASA", "1")
+    weather = tuple(w for w in pipeline.generate_weather(2025, 24.75, 90.41, 10, 42) if START <= w.d <= END)
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    with patch.object(pipeline, "power_daily", return_value=weather) as power, \
+         patch.object(pipeline, "_load_optional_remote", return_value=()) as satellites, \
+         patch.object(pipeline, "nex_gddp_monthly_deltas", return_value=gee.NEXDeltaResult(None, "not_configured")):
+        data = pipeline.load_scenarios(field, 2025, tmp_path, [], start_date=START, end_date=END)
+    assert power.call_args.args[2:4] == (START, END)
+    assert satellites.call_args.args[3:5] == (START, END)
+    assert data[0].weather[0].d == START and data[0].weather[-1].d == date(2027, 12, 31)
+    assert len(data[0].weather) == 1095
+
+
+def test_dates_survive_api_what_if_and_report(monkeypatch):
+    monkeypatch.setenv("FIELD_SHIFT_LIVE_NASA", "0")
+    client = TestClient(app)
+    payload = {"start_date": "2025-01-01", "end_date": "2025-01-15", "n_uncertainty_samples": 20, "n_weight_samples": 60}
+    response = client.post("/api/analysis/run", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    run_id = data["run"]["id"]
+    window = data["run"]["evidence_window"]
+    assert window["start_date"] == "2025-01-01" and window["end_date"] == "2025-01-15"
+    assert window["plan_start_year"] == 2025
+    from fieldshift.api import product
+    product._RUNS.clear()  # Simulate the next request reaching another Vercel instance.
+    changed = client.post(f"/api/analysis/{run_id}/what-if", json={"scenario": "dry", "field": data["field"], "evidence_window": window})
+    assert changed.status_code == 200
+    assert changed.json()["run"]["evidence_window"] == window
+    report = client.post(f"/api/analysis/{run_id}/report", json={"data": data}).json()
+    assert report["evidence_window"] == window
+
+
+def test_nex_uses_cached_historical_normals_for_second_scenario(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+    monkeypatch.setattr(gee, "_initialise_ee", lambda: object())
+    old = {"tasmax": 301, "tasmin": 291, "hurs": 70, "pr": 0.0001, "rsds": 150, "sfcWind": 2}
+    def month(ee, lat, lon, period, scenario, month):
+        return {**old, "tasmax": 303 if period == "future" else 301}
+    with patch.object(gee, "_fetch_normal_month", side_effect=month) as fetch:
+        first = gee.nex_gddp_monthly_deltas(24.75, 90.41, "ssp245", tmp_path)
+        second = gee.nex_gddp_monthly_deltas(24.75, 90.41, "ssp585", tmp_path)
+    assert fetch.call_count == 36  # 12 historical + 12 each future scenario.
+    assert first.status == second.status == "live"
+    assert first.monthly[1]["tasmax_delta_c"] == 2
+
+
+def test_provider_error_redacts_secrets(monkeypatch):
+    monkeypatch.setenv("FIELD_SHIFT_APPEEARS_PASSWORD", "secret-pass")
+    value = safe_error(RuntimeError("HTTP 403 secret-pass Bearer abc user@example.com projects/private-project"))
+    assert "HTTP 403" in value
+    assert not any(x in value for x in ("secret-pass", "abc", "user@example.com", "private-project"))
+
+
+def test_single_day_is_inclusive():
+    assert evidence_dates("2025-01-01", "2025-01-01") == (START, START)
+
+
+def test_earth_engine_graphs_build_with_official_python_client(monkeypatch, tmp_path):
+    import ee
+    import ee.apitestcase
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        graphs = []
+        def compute(expression):
+            graphs.append(json.dumps(ee.serializer.encode(expression)))
+            if isinstance(expression, ee.FeatureCollection):
+                return {"features": [{"properties": {"date": "2025-01-01", "gpm_rain_mm": 8, "count": 48}},
+                                      {"properties": {"date": "2025-01-02", "gpm_rain_mm": 2, "count": 47}},
+                                      {"properties": {"date": "2025-01-03", "gpm_rain_mm": None, "count": 0}}]}
+            return {"tasmax": 301, "tasmin": 290, "hurs": 75, "pr": 0.0001, "rsds": 150, "sfcWind": 2}
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        rain = gee.gpm_daily_point_timeseries(24.75, 90.41, START, END, tmp_path)
+        assert len(rain) == 1 and rain[0].gpm_rain_mm == 8
+        normal = gee._fetch_normal_month(ee, 24.75, 90.41, "historical", "ssp245", 1)
+        assert normal["tasmax"] == 301
+        assert len(graphs) == 2
+    finally:
+        case.tearDown()
+
+
+def test_nex_pending_can_resume_cached_months(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+    monkeypatch.setattr(gee, "_initialise_ee", lambda: object())
+    old = {"tasmax": 301, "tasmin": 291, "hurs": 70, "pr": 0.0001, "rsds": 150, "sfcWind": 2}
+    key = gee._cache_path(tmp_path, 24.75, 90.41, "historical").stem
+    gee._write_cache(tmp_path / f"{key}_historical_01.json", {"normal": old})
+    times = iter([0] + [100] * 30)
+    with patch.object(gee.time, "monotonic", side_effect=lambda: next(times)):
+        pending = gee.nex_gddp_monthly_deltas(24.75, 90.41, "ssp245", tmp_path)
+    assert pending.status == "pending" and "1/24" in pending.error
+    with patch.object(gee, "_fetch_normal_month", return_value=old) as fetch:
+        completed = gee.nex_gddp_monthly_deltas(24.75, 90.41, "ssp245", tmp_path)
+    assert completed.status == "live" and fetch.call_count == 23

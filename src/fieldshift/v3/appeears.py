@@ -1,0 +1,780 @@
+"""NASA AppEEARS point-sampling connector for satellite time-series evidence.
+
+The connector is opt-in because NASA Earthdata credentials are required. It
+discovers current AppEEARS product/layer versions at runtime so a retired
+collection does not silently become a source of fabricated data.
+"""
+from __future__ import annotations
+
+import base64
+import csv
+import hashlib
+import io
+import json
+import math
+import os
+import re
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any, TypedDict
+
+from .diagnostics import safe_error
+from .models import Provenance, RemoteDay
+from .provenance import now_iso
+
+APPEEARS_API = "https://appeears.earthdatacloud.nasa.gov/api/"
+_TASK_LOCKS_GUARD = threading.Lock()
+_TASK_LOCKS: dict[str, threading.Lock] = {}
+_TOKEN_GUARD = threading.Lock()
+_TOKEN_VALUE: str | None = None
+_TOKEN_EXPIRATION_TS: float = 0.0
+_TOKEN_SOURCE: str | None = None
+
+
+class AppEEARSDataError(RuntimeError):
+    """Raised when AppEEARS cannot provide an authenticated point sample."""
+
+
+@dataclass(frozen=True)
+class LayerSelection:
+    source_key: str
+    source_name: str
+    product: str
+    layer: str
+    target: str
+    resolution: str | None
+    temporal_resolution: str | None
+    available_start: date | None = None
+    available_end: date | None = None
+
+
+@dataclass(frozen=True)
+class AppEEARSResult:
+    remote: tuple[RemoteDay, ...]
+    datasets: tuple[dict[str, Any], ...]
+
+
+class SourceDefinition(TypedDict):
+    key: str
+    name: str
+    product_ids: tuple[str, ...]
+    layers: dict[str, tuple[str, ...]]
+    source_type: str
+    citation: str
+
+
+SOURCE_DEFINITIONS: tuple[SourceDefinition, ...] = (
+    {
+        "key": "smap",
+        "name": "NASA SMAP",
+        "product_ids": ("SPL4SMGP.008", "SPL3SMP_E.006", "SPL3SMP.009"),
+        "layers": {
+            "smap_surface_m3_m3": ("sm_surface", "surface_soil_moisture", "soil_moisture", "soil_moisture_am"),
+            "smap_rootzone_m3_m3": ("sm_rootzone", "rootzone_soil_moisture"),
+            "smap_qa": ("retrieval_qual_flag", "retrieval_qual_flag_am"),
+        },
+        "source_type": "satellite",
+        "citation": "https://nsidc.org/data/spl4smgp/versions/8",
+    },
+    {
+        "key": "modis_et",
+        "name": "NASA MODIS MOD16",
+        "product_ids": ("MOD16A2GF.061", "MOD16A2.061"),
+        "layers": {
+            "modis_et_mm": ("ET_500m", "ET"),
+            "modis_et_qc": ("ET_QC_500m",),
+        },
+        "source_type": "satellite",
+        "citation": "https://doi.org/10.5067/MODIS/MOD16A2GF.061",
+    },
+    {
+        "key": "hls_vi",
+        "name": "NASA HLS",
+        "product_ids": (),
+        "layers": {
+            "ndvi": ("NDVI",),
+            "evi": ("EVI",),
+            "ndmi": ("NDMI",),
+            "hls_qa": ("QA", "Fmask"),
+        },
+        "source_type": "satellite",
+        "citation": "https://doi.org/10.5067/HLS/HLSL30_VI.002",
+    },
+)
+
+
+def credentials_configured() -> bool:
+    return bool((os.getenv("FIELD_SHIFT_APPEEARS_TOKEN", "").strip()) or (os.getenv("FIELD_SHIFT_APPEEARS_USER", "").strip() and os.getenv("FIELD_SHIFT_APPEEARS_PASSWORD", "")))
+
+
+def _clear_token() -> None:
+    global _TOKEN_VALUE, _TOKEN_EXPIRATION_TS, _TOKEN_SOURCE
+    with _TOKEN_GUARD:
+        _TOKEN_VALUE = None
+        _TOKEN_EXPIRATION_TS = 0.0
+        _TOKEN_SOURCE = None
+
+
+def _login_token(*, timeout: int = 25, force: bool = False) -> str:
+    """Acquire/reuse the official AppEEARS Bearer token.
+
+    The API token is valid for roughly 48 hours; this in-process cache avoids
+    logging in on every analysis request and refreshes only when needed.
+    """
+    global _TOKEN_VALUE, _TOKEN_EXPIRATION_TS, _TOKEN_SOURCE
+    supplied = os.getenv("FIELD_SHIFT_APPEEARS_TOKEN", "").strip()
+    user = os.getenv("FIELD_SHIFT_APPEEARS_USER", "").strip()
+    password = os.getenv("FIELD_SHIFT_APPEEARS_PASSWORD", "")
+    if not supplied and not (user and password):
+        raise AppEEARSDataError("AppEEARS credentials are not configured")
+    source = "env-token" if supplied else f"basic:{hashlib.sha256(user.encode()).hexdigest()[:12]}"
+    with _TOKEN_GUARD:
+        now = time.time()
+        if not force and _TOKEN_VALUE and _TOKEN_SOURCE == source and _TOKEN_EXPIRATION_TS > now + 120:
+            return _TOKEN_VALUE
+        if supplied and not force:
+            _TOKEN_VALUE = supplied
+            # User supplied tokens do not expose an expiration here; force a
+            # refresh on the first 403 if username/password are available.
+            _TOKEN_EXPIRATION_TS = now + 6 * 3600
+            _TOKEN_SOURCE = source
+            return supplied
+        if supplied and not (user and password):
+            raise AppEEARSDataError("Configured AppEEARS token is unavailable; provide Earthdata username/password for automatic refresh.")
+        token_response = _safe_json_request(
+            "login", method="POST", auth=(user, password), timeout=timeout, _allow_token_refresh=False,
+        )
+        token = token_response.get("token") if isinstance(token_response, dict) else None
+        if not token:
+            raise AppEEARSDataError("AppEEARS login did not return a bearer token")
+        expiration = token_response.get("expiration") if isinstance(token_response, dict) else None
+        try:
+            expiry_ts = datetime.fromisoformat(str(expiration)).timestamp() if expiration else now + 44 * 3600
+        except (TypeError, ValueError, OverflowError):
+            expiry_ts = now + 44 * 3600
+        _TOKEN_VALUE = str(token)
+        _TOKEN_EXPIRATION_TS = expiry_ts
+        _TOKEN_SOURCE = source
+        return _TOKEN_VALUE
+
+
+def _safe_json_request(
+    path: str,
+    *,
+    method: str = "GET",
+    token: str | None = None,
+    payload: dict[str, Any] | None = None,
+    auth: tuple[str, str] | None = None,
+    timeout: int = 25,
+    _allow_token_refresh: bool = True,
+) -> Any:
+    headers = {"User-Agent": "FieldShift/3.2 NASA AppEEARS connector"}
+    body = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if auth:
+        basic = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode("ascii")
+        headers["Authorization"] = f"Basic {basic}"
+        headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"
+        body = b"grant_type=client_credentials"
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(f"{APPEEARS_API}{path.lstrip('/')}", data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        # NASA AppEEARS documents 403 as the signal to reacquire an expired
+        # Bearer token. Refresh at most once for a secure request.
+        if exc.code in {401, 403} and token and _allow_token_refresh:
+            _clear_token()
+            fresh = _login_token(timeout=timeout, force=True)
+            return _safe_json_request(
+                path, method=method, token=fresh, payload=payload, auth=None, timeout=timeout, _allow_token_refresh=False,
+            )
+        detail = exc.read(512).decode("utf-8", "replace")
+        raise AppEEARSDataError(f"AppEEARS returned HTTP {exc.code}: {detail[:300]}") from exc
+    except Exception as exc:
+        raise AppEEARSDataError(f"AppEEARS request failed: {safe_error(exc)}") from exc
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AppEEARSDataError("AppEEARS returned an invalid JSON response") from exc
+
+
+def _download(path: str, token: str, timeout: int = 40) -> bytes:
+    """Download a completed AppEEARS bundle file, refreshing an expired token once."""
+    def fetch(active_token: str) -> bytes:
+        request = urllib.request.Request(
+            f"{APPEEARS_API}{path.lstrip('/')}",
+            headers={
+                "Authorization": f"Bearer {active_token}",
+                "User-Agent": "FieldShift/3.2 NASA AppEEARS connector",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+
+    try:
+        return fetch(token)
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            _clear_token()
+            try:
+                fresh = _login_token(timeout=min(timeout, 25), force=True)
+                return fetch(fresh)
+            except Exception as refresh_exc:
+                raise AppEEARSDataError(
+                    f"AppEEARS file download failed after token refresh: {type(refresh_exc).__name__}"
+                ) from refresh_exc
+        raise AppEEARSDataError(f"AppEEARS file download failed: HTTP {exc.code}") from exc
+    except Exception as exc:
+        raise AppEEARSDataError(f"AppEEARS file download failed: {type(exc).__name__}") from exc
+
+
+def _product_matches(definition: SourceDefinition, product: dict[str, Any]) -> bool:
+    product_id = str(product.get("ProductAndVersion", ""))
+    if not product.get("Available", True) or product.get("Deleted", False):
+        return False
+    if product_id in definition["product_ids"]:
+        return True
+    lower_id = product_id.lower()
+    description = str(product.get("Description", "")).lower()
+    product_name = str(product.get("Product", "")).lower()
+    if definition["key"] == "hls_vi":
+        return "hls" in lower_id and ("_vi" in lower_id or "vegetation indices" in description)
+    if definition["key"] == "gpm":
+        return ("gpm" in lower_id or "imerg" in lower_id or "imerg" in product_name) and (
+            "df" in lower_id or "daily" in description.lower()
+        )
+    return False
+
+
+def _norm(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _first_layer(layers: dict[str, Any], aliases: tuple[str, ...]) -> str | None:
+    by_norm = {_norm(name): name for name in layers}
+    # AppEEARS may namespace a layer, e.g.
+    # Geophysical_Data_sm_surface, while the semantic alias is sm_surface.
+    # Match exact normalized names first, then namespace-safe suffix matches.
+    for alias in aliases:
+        alias_norm = _norm(alias)
+        exact = by_norm.get(alias_norm)
+        if exact:
+            return exact
+        for layer_norm, original in by_norm.items():
+            if layer_norm.endswith(alias_norm):
+                return original
+    return None
+
+
+def discover_layers(
+    token: str, timeout: int = 25, *, source_key: str | None = None,
+    start: date | None = None, end: date | None = None, products=None,
+) -> tuple[LayerSelection, ...]:
+    if products is None:
+        products = _safe_json_request("product", token=token, timeout=timeout)
+    if not isinstance(products, list):
+        raise AppEEARSDataError("AppEEARS product catalog has an unexpected format")
+    selected: list[LayerSelection] = []
+    for definition in SOURCE_DEFINITIONS:
+        if source_key and definition["key"] != source_key:
+            continue
+        candidates = [p for p in products if isinstance(p, dict) and _product_matches(definition, p)]
+        priorities = {pid: i for i, pid in enumerate(definition["product_ids"])}
+
+        def overlap(product):
+            first = _date_value(str(product.get("TemporalExtentStart", "")))
+            last = _date_value(str(product.get("TemporalExtentEnd", "")))
+            lo, hi = max(start or date.min, first or date.min), min(end or date.max, last or date.max)
+            return max(0, (hi - lo).days + 1)
+
+        # Prefer coverage of the requested period, then the supported product order.
+        candidates.sort(key=lambda p: (-overlap(p), priorities.get(str(p.get("ProductAndVersion", "")), 99)))
+        errors = []
+        for product in candidates:
+            if not overlap(product):
+                continue
+            product_id = str(product.get("ProductAndVersion", ""))
+            try:
+                layer_map = _safe_json_request(f"product/{urllib.parse.quote(product_id, safe='.')}", token=token, timeout=timeout)
+            except AppEEARSDataError as exc:
+                errors.append(safe_error(exc))
+                continue
+            if not isinstance(layer_map, dict):
+                continue
+            layer_map = {k: v for k, v in layer_map.items() if not isinstance(v, dict) or v.get("Available", True)}
+            found = []
+            for target, aliases in definition["layers"].items():
+                layer_name = _first_layer(layer_map, aliases)
+                if layer_name:
+                    found.append(LayerSelection(
+                        definition["key"], definition["name"], product_id, layer_name, target,
+                        product.get("Resolution"), product.get("TemporalGranularity"),
+                        _date_value(str(product.get("TemporalExtentStart", ""))),
+                        _date_value(str(product.get("TemporalExtentEnd", ""))),
+                    ))
+            targets = {x.target for x in found}
+            if definition["key"] == "smap":
+                moisture = bool(targets & {"smap_surface_m3_m3", "smap_rootzone_m3_m3"})
+                valid = moisture and (product_id.startswith("SPL4") or "smap_qa" in targets)
+            elif definition["key"] == "modis_et":
+                valid = {"modis_et_mm", "modis_et_qc"}.issubset(targets)
+            else:
+                valid = {"ndvi", "evi"}.issubset(targets)
+            if valid:
+                selected.extend(found)
+                break
+        else:
+            if errors:
+                raise AppEEARSDataError("Product discovery failed: " + " | ".join(errors))
+    return tuple(selected)
+
+
+def _cache_key(lat: float, lon: float, start: date, end: date) -> str:
+    raw = f"{lat:.5f}|{lon:.5f}|{start.isoformat()}|{end.isoformat()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _task_name(cache_key: str) -> str:
+    """Keep the legacy stable name so already queued AppEEARS jobs are reused."""
+    return f"fieldshift-{cache_key}"
+
+
+def _task_is_reusable(task: dict[str, Any]) -> bool:
+    """Reuse active tasks and unexpired bundles; avoid resubmitting failed jobs forever."""
+    status = str(task.get("status", "")).lower()
+    if status in {"pending", "processing"}:
+        return True
+    if status in {"error", "failed", "cancelled"}:
+        if os.getenv("FIELD_SHIFT_APPEEARS_RETRY_FAILED", "").lower() in {"1", "true", "yes"}:
+            return False
+        # Reuse a recent failure briefly to prevent retry storms, not forever.
+        try:
+            failed_at = datetime.fromisoformat(str(task.get("updated") or task.get("created")))
+            if failed_at.tzinfo is None:
+                failed_at = failed_at.replace(tzinfo=UTC)
+            return (datetime.now(UTC) - failed_at).total_seconds() < 600
+        except (TypeError, ValueError):
+            return False
+    expires_on = task.get("expires_on")
+    if expires_on:
+        try:
+            expiry = datetime.fromisoformat(str(expires_on))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=UTC)
+            return expiry > datetime.now(UTC)
+        except ValueError:
+            return False
+    created = task.get("created")
+    if created:
+        try:
+            created_at = datetime.fromisoformat(str(created))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            return (datetime.now(UTC) - created_at).total_seconds() <= 30 * 86400
+        except ValueError:
+            return False
+    return status == "done"
+
+
+def _find_recent_task(
+    token: str, task_name: str, selections: tuple[LayerSelection, ...], *, timeout: int,
+) -> dict[str, Any] | None:
+    """Find this AppEEARS request in the account task list after serverless cache loss.
+
+    Vercel function files are not durable across instances. The AppEEARS task
+    list is the authoritative fallback that prevents each analysis from creating
+    another queued job and notification for the same field request.
+    """
+    limit = max(1, min(200, int(os.getenv("FIELD_SHIFT_APPEEARS_TASK_SCAN_LIMIT", "100"))))
+    pages = max(1, min(10, int(os.getenv("FIELD_SHIFT_APPEEARS_TASK_SCAN_PAGES", "3"))))
+    for page in range(pages):
+        offset = page * limit
+        tasks = _safe_json_request(
+            f"task?task_type=point&limit={limit}&offset={offset}", token=token, timeout=timeout,
+        )
+        if not isinstance(tasks, list):
+            raise AppEEARSDataError("AppEEARS task list returned an unexpected format")
+        for task in tasks:
+            if not isinstance(task, dict) or task.get("task_name") != task_name or not _task_is_reusable(task):
+                continue
+            params = task.get("params")
+            existing_layers = params.get("layers") if isinstance(params, dict) else None
+            if isinstance(existing_layers, list):
+                requested = sorted((item.product, item.layer) for item in selections)
+                available = sorted(
+                    (str(item.get("product", "")), str(item.get("layer", "")))
+                    for item in existing_layers if isinstance(item, dict)
+                )
+                if available and available != requested:
+                    continue
+            return task
+        if len(tasks) < limit:
+            break
+    return None
+
+
+def _task_lock(task_name: str) -> threading.Lock:
+    """Serialize same-process submissions for one field request."""
+    with _TASK_LOCKS_GUARD:
+        return _TASK_LOCKS.setdefault(task_name, threading.Lock())
+
+
+def _cache_paths(cache_dir: Path, key: str) -> tuple[Path, Path]:
+    return cache_dir / f"appeears_{key}.json", cache_dir / f"appeears_{key}.pending.json"
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+            json.dump(payload, handle)
+            tmp = Path(handle.name)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except (OSError, UnboundLocalError):
+            pass
+
+
+def _read_cache(path: Path, ttl: int) -> tuple[tuple[RemoteDay, ...] | None, float | None, dict[str, Any]]:
+    try:
+        age = max(0.0, time.time() - path.stat().st_mtime)
+        if age > ttl:
+            return None, age, {}
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        rows = envelope.get("remote", []) if isinstance(envelope, dict) else envelope
+        out = []
+        for row in rows:
+            row["d"] = date.fromisoformat(row["d"])
+            if row.get("provenance"):
+                row["provenance"] = Provenance(**row["provenance"])
+            out.append(RemoteDay(**row))
+        statuses = envelope.get("dataset_statuses", {}) if isinstance(envelope, dict) else {}
+        return tuple(out), age, statuses if isinstance(statuses, dict) else {}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None, None, {}
+
+
+def _date_value(value: str) -> date | None:
+    clean = value.strip()
+    try:
+        return date.fromisoformat(clean[:10])
+    except (ValueError, TypeError):
+        pass
+    try:
+        if len(clean) == 8 and clean.isdigit():
+            return date(int(clean[:4]), int(clean[4:6]), int(clean[6:8]))
+        month, day, year = clean.split("/")
+        return date(int(year), int(month), int(day))
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _number(value: str | None) -> float | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    if (
+        not math.isfinite(number)
+        or number in {-9999.0, -999.0, -32768.0, 32767.0, 32768.0, 65535.0}
+        or 32761.0 <= number <= 32766.0
+    ):
+        return None
+    return number
+
+
+def _field_value(row: dict[str, str], layer: str) -> float | None:
+    layer_key = _norm(layer)
+    for name, value in row.items():
+        name_key = _norm(name)
+        if name_key == layer_key or name_key.endswith(layer_key):
+            return _number(value)
+    return None
+
+
+def _quality_details(source_key: str, selections: tuple[LayerSelection, ...]) -> tuple[str, str]:
+    selected = [x for x in selections if x.source_key == source_key]
+    targets = {x.target for x in selected}
+    if source_key == "modis_et":
+        if "modis_et_qc" in targets:
+            return "applied", "MOD16 ET_QC_500m was decoded; only observations with MODLAND_QC=0 were retained."
+        return "unavailable", "The AppEEARS catalog did not expose ET_QC_500m; MOD16 ET observations are excluded."
+    if source_key == "hls_vi":
+        if "hls_qa" in targets:
+            return "applied", "HLS QA was decoded; cloud, cloud-adjacent, shadow, snow/ice, water, and highest-aerosol pixels were excluded."
+        return "provider_masked", "HLS VI processing masks cloud and cloud-shadow pixels; no separate HLS QA layer was returned to filter water, snow, or aerosol flags."
+    if source_key == "smap":
+        if "smap_qa" in targets and any(x.product.startswith("SPL3") for x in selected):
+            return "applied", "SMAP retrieval_qual_flag was applied to L3 retrievals; only documented recommended-quality flags 0 or 8 were retained."
+        if any(x.product.startswith("SPL4SMGP") for x in selected):
+            return "product_level", "SPL4SMGP is an assimilated L4 geophysical estimate and does not provide the L2/L3 retrieval_qual_flag in the sampled fields. Values are not described as retrieval-flag filtered."
+        return "unavailable", "A supported SMAP quality flag was not exposed; SMAP L3 moisture observations are excluded."
+    if source_key == "gpm":
+        return "product_level", "IMERG Final calibrated precipitation was selected; no separate AppEEARS pixel QA flag was applied."
+    return "not_reported", "No product-specific quality handling is configured."
+
+
+def _hls_clear(qa: float) -> bool:
+    value = int(qa)
+    # HLS QA bits 1-5 flag cloud, adjacency, shadow, snow/ice, and water;
+    # bits 6-7 encode aerosol optical thickness, with 3 representing high AOT.
+    return value >= 0 and (value & 0b00111110) == 0 and ((value >> 6) & 0b11) != 3
+
+
+def _records_from_csv_files(
+    files: list[tuple[str, bytes]], selections: tuple[LayerSelection, ...], retrieval_date: str,
+    start: date, end: date,
+) -> tuple[RemoteDay, ...]:
+    grouped: dict[date, dict[str, list[float]]] = {}
+    modis_period_days: dict[date, int] = {}
+    for file_name, raw in files:
+        if not file_name.lower().endswith(".csv"):
+            continue
+        try:
+            reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
+            for row in reader:
+                raw_date = row.get("Date") or row.get("date") or row.get("Day")
+                day = _date_value(raw_date or "")
+                if day is None or day < start or day > end:
+                    continue
+                row_values: dict[str, float] = {}
+                for selection in selections:
+                    product_key = _norm(selection.product)
+                    file_key = _norm(file_name)
+                    # AppEEARS creates a per-product file; when filenames omit the
+                    # collection, a unique layer name remains a sufficient match.
+                    layer_columns = [c for c in row if _norm(c) == _norm(selection.layer) or _norm(c).endswith(_norm(selection.layer))]
+                    if not layer_columns:
+                        continue
+                    if product_key not in file_key and len(layer_columns) > 1:
+                        continue
+                    value = _field_value(row, selection.layer)
+                    if value is None:
+                        continue
+                    row_values[selection.target] = value
+                smap_is_l3 = any(x.source_key == "smap" and x.product.startswith("SPL3") for x in selections)
+                if smap_is_l3:
+                    smap_qa = row_values.get("smap_qa")
+                    if smap_qa is None or int(smap_qa) not in {0, 8}:
+                        row_values.pop("smap_surface_m3_m3", None)
+                        row_values.pop("smap_rootzone_m3_m3", None)
+                modis_selected = any(x.source_key == "modis_et" and x.target == "modis_et_mm" for x in selections)
+                if modis_selected:
+                    qc = row_values.get("modis_et_qc")
+                    et = row_values.get("modis_et_mm")
+                    # MODLAND_QC is bit 0 (bit 1 identifies the sensor) of ET_QC_500m. Missing QA must not
+                    # silently turn a low-quality ET estimate into trusted evidence.
+                    if et is not None and qc is not None and (int(qc) & 0b1) == 0:
+                        period = min(8, (date(day.year, 12, 31) - day).days + 1)
+                        row_values["modis_et_mm"] = et / period
+                        modis_period_days[day] = period
+                    else:
+                        row_values.pop("modis_et_mm", None)
+                if any(x.source_key == "hls_vi" for x in selections):
+                    hls_values = {k: v for k, v in row_values.items() if k in {"ndvi", "evi", "ndmi"}}
+                    if "hls_qa" in row_values and not _hls_clear(row_values["hls_qa"]):
+                        for key in hls_values:
+                            row_values.pop(key, None)
+                    # Without the separate QA field, HLS VI cloud/shadow masking is
+                    # still provider-applied; ancillary water/snow/aerosol checks are disclosed.
+                values = grouped.setdefault(day, {})
+                for target, value in row_values.items():
+                    if target.endswith(("_qa", "_qc")):
+                        continue
+                    values.setdefault(target, []).append(value)
+        except (UnicodeDecodeError, csv.Error):
+            continue
+    output: list[RemoteDay] = []
+    for day, fields in sorted(grouped.items()):
+        averages = {key: sum(vals) / len(vals) for key, vals in fields.items() if vals}
+        if not averages:
+            continue
+        source_names = sorted({x.source_name for x in selections if x.target in fields})
+        resolutions = sorted({x.resolution for x in selections if x.target in fields and x.resolution})
+        provenance = Provenance(
+            source="NASA AppEEARS point sample: " + ", ".join(source_names),
+            source_type="satellite",
+            retrieval_date=retrieval_date,
+            spatial_resolution="mixed native pixels: " + ", ".join(resolutions) if resolutions else "native product pixels",
+            temporal_resolution="product native interval",
+            citation="https://appeears.earthdatacloud.nasa.gov/api/",
+            confidence=0.80,
+        )
+        output.append(RemoteDay(
+            d=day, source=provenance.source, provenance=provenance,
+            modis_et_period_days=modis_period_days.get(day, 1), **averages,
+        ))
+    return tuple(output)
+
+
+def _source_statuses(selections: tuple[LayerSelection, ...], status: str, coverage: str | None = None) -> list[dict[str, Any]]:
+    records = []
+    missing_status = "not_configured" if status == "not_configured" else "unavailable"
+    missing_hint = (
+        "Set FIELD_SHIFT_APPEEARS_USER/FIELD_SHIFT_APPEEARS_PASSWORD (or a managed AppEEARS token) for authenticated point sampling."
+        if missing_status == "not_configured"
+        else "The credentials worked, but the current AppEEARS catalog did not expose a supported product/layer for this source; no values were imputed."
+    )
+    for definition in SOURCE_DEFINITIONS:
+        found = [x for x in selections if x.source_key == definition["key"]]
+        if not found:
+            records.append({
+                "name": definition["name"], "source_type": "satellite", "status": missing_status,
+                "coverage": coverage or "No matching supported product/layer is currently available from the AppEEARS catalog.",
+                "setup_hint": missing_hint,
+                "citation": definition["citation"],
+            })
+            continue
+        records.append({
+            "name": definition["name"], "source_type": "satellite", "status": status,
+            "coverage": coverage or "; ".join(f"{x.product}/{x.layer} ({x.resolution or 'native'}, {x.temporal_resolution or 'native cadence'})" for x in found),
+            "citation": definition["citation"],
+        })
+    return records
+
+
+def _sample_source(
+    definition: SourceDefinition, token: str, products: list, lat: float, lon: float,
+    start: date, end: date, cache_dir: Path, timeout: int, max_wait_seconds: int,
+) -> AppEEARSResult:
+    key, name = definition["key"], definition["name"]
+    selections = discover_layers(token, timeout, source_key=key, start=start, end=end, products=products)
+    selections = tuple(x for x in selections if x.source_key == key)
+
+    def result(status, coverage, remote=(), **extra):
+        records = _source_statuses(selections, status, coverage)
+        record = next(x for x in records if x["name"] == name)
+        record.update(status=status, data_start_date=start.isoformat(), data_end_date=end.isoformat(), **extra)
+        return AppEEARSResult(tuple(remote), (record,))
+
+    if not selections:
+        return result("unavailable", "No supported product with usable layers overlaps the requested dates. Try an earlier date range.")
+    requested_start, requested_end = start, end
+    start = max([start] + [x.available_start for x in selections if x.available_start])
+    end = min([end] + [x.available_end for x in selections if x.available_end])
+    signature = "v4|" + key + "|" + _cache_key(lat, lon, start, end) + "|" + "|".join(sorted(x.product + "/" + x.layer for x in selections))
+    cache_key = hashlib.sha256(signature.encode()).hexdigest()[:24]
+    cache_path, pending_path = _cache_paths(cache_dir, cache_key)
+    task_name = "fieldshift-v4-" + key + "-" + cache_key
+    ttl = max(60, int(os.getenv("FIELD_SHIFT_APPEEARS_CACHE_TTL_SECONDS", "604800")))
+    cached, age, metadata = _read_cache(cache_path, ttl)
+    if cached is not None:
+        stored = metadata.get(name, {})
+        return result(stored.get("status", "available"), stored.get("coverage", "Cached NASA observations."), cached,
+                      retrieval_mode="cache", quality_status=stored.get("quality_status"), quality_note=stored.get("quality_note"),
+                      retrieval_date=stored.get("retrieval_date"), cache_age_seconds=int(age or 0))
+    task_id = ""
+    with _task_lock(task_name):
+        try:
+            pending = json.loads(pending_path.read_text())
+            if pending.get("task_name") == task_name and time.time() - float(pending.get("created", 0)) < 7 * 86400:
+                task_id = str(pending["task_id"])
+                try:
+                    task = _safe_json_request(f"task/{urllib.parse.quote(task_id, safe='-')}", token=token, timeout=timeout)
+                    if not _task_is_reusable(task):
+                        task_id = ""
+                except AppEEARSDataError as exc:
+                    if "HTTP 404" not in str(exc):
+                        raise
+                    task_id = ""
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        if not task_id:
+            existing = _find_recent_task(token, task_name, selections, timeout=timeout)
+            task_id = str(existing.get("task_id", "")) if existing else ""
+        if not task_id:
+            payload = {"task_type": "point", "task_name": task_name, "params": {
+                "dates": [{"startDate": start.strftime("%m-%d-%Y"), "endDate": end.strftime("%m-%d-%Y")}],
+                "layers": [{"product": x.product, "layer": x.layer} for x in selections],
+                "coordinates": [{"id": "field", "latitude": lat, "longitude": lon, "category": "field"}],
+            }}
+            submitted = _safe_json_request("task", method="POST", token=token, payload=payload, timeout=timeout)
+            task_id = str(submitted.get("task_id", ""))
+            if not task_id:
+                raise AppEEARSDataError("AppEEARS did not return a task identifier.")
+        _write_json(pending_path, {"task_id": task_id, "task_name": task_name, "created": time.time()})
+    deadline = time.monotonic() + max_wait_seconds
+    while True:
+        task = _safe_json_request(f"task/{urllib.parse.quote(task_id, safe='-')}", token=token, timeout=timeout)
+        status = str(task.get("status", "unknown")).lower()
+        if status == "done":
+            break
+        if status in {"error", "failed", "cancelled"}:
+            pending_path.unlink(missing_ok=True)
+            detail = safe_error(AppEEARSDataError(str(task.get("error") or task.get("message") or status)))
+            return result("unavailable", f"This {key} task ended with status {status}; the other products run independently.", error=detail)
+        if time.monotonic() >= deadline:
+            return result("pending", f"NASA is {status} this point sample. Refreshing resumes the same task.", retry_after_seconds=15)
+        time.sleep(min(3, max(0, deadline - time.monotonic())))
+    bundle = _safe_json_request(f"bundle/{task_id}", token=token, timeout=timeout)
+    csv_files = []
+    for item in bundle.get("files", []):
+        filename = str(item.get("file_name", ""))
+        if item.get("file_id") and (str(item.get("file_type", "")).lower() == "csv" or filename.lower().endswith(".csv")):
+            csv_files.append((filename, _download(f"bundle/{task_id}/{urllib.parse.quote(str(item['file_id']), safe='-')}", token, timeout)))
+    retrieved = now_iso()
+    remote = _records_from_csv_files(csv_files, selections, retrieved, start, end)
+    pending_path.unlink(missing_ok=True)
+    if not remote:
+        return result("unavailable", "NASA completed the task but returned no usable values after date, fill-value and quality checks. Try another date range.")
+    quality, note = _quality_details(key, selections)
+    coverage = f"{len(remote)} usable observation dates, {remote[0].d} to {remote[-1].d}; product {selections[0].product}."
+    partial = start != requested_start or end != requested_end
+    if partial:
+        coverage += f" Product availability limited the request to {start} through {end}."
+    output = result("partial" if partial else "available", coverage, remote,
+                    retrieval_mode="live", retrieval_date=retrieved, quality_status=quality, quality_note=note)
+    _write_json(cache_path, {"remote": [{**asdict(row), "d": row.d.isoformat()} for row in remote],
+                             "dataset_statuses": {name: output.datasets[0]}})
+    return output
+
+
+def appeears_point_timeseries(
+    lat: float, lon: float, start: date, end: date, *, cache_dir: str | Path,
+    timeout: int = 20, max_wait_seconds: int | None = None,
+) -> AppEEARSResult:
+    """One shared token, independent SMAP/MODIS/HLS tasks, resumable across requests."""
+    if not credentials_configured():
+        return AppEEARSResult((), tuple(_source_statuses((), "not_configured", "Earthdata credentials are not configured on the server.")))
+    if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180 or start > end:
+        raise ValueError("Invalid coordinate or date range for AppEEARS")
+    max_days = max(1, min(366, int(os.getenv("FIELD_SHIFT_APPEEARS_MAX_DAYS", "366"))))
+    if (end - start).days + 1 > max_days:
+        raise ValueError(f"AppEEARS date range exceeds configured limit of {max_days} days; shorten the range.")
+    try:
+        token = _login_token(timeout=timeout)
+        products = _safe_json_request("product", token=token, timeout=timeout)
+    except Exception as exc:
+        return AppEEARSResult((), tuple({"name": d["name"], "source_type": "satellite", "status": "unavailable",
+                                        "error": safe_error(exc), "coverage": "Earthdata login or product catalog request failed."}
+                                       for d in SOURCE_DEFINITIONS))
+    wait = max_wait_seconds if max_wait_seconds is not None else int(os.getenv("FIELD_SHIFT_APPEEARS_WAIT_SECONDS", "0"))
+
+    def sample(definition):
+        try:
+            return _sample_source(definition, token, products, lat, lon, start, end, Path(cache_dir), timeout, max(0, min(30, wait)))
+        except Exception as exc:
+            return AppEEARSResult((), ({"name": definition["name"], "source_type": "satellite", "status": "unavailable",
+                                       "error": safe_error(exc), "coverage": "This product request failed; other datasets continue independently."},))
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(sample, SOURCE_DEFINITIONS))
+    return AppEEARSResult(tuple(row for r in results for row in r.remote), tuple(item for r in results for item in r.datasets))
