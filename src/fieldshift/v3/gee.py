@@ -40,6 +40,20 @@ class NEXPending(RuntimeError):
     """A bounded request saved partial monthly normals for a later refresh."""
 
 
+class NEXRetryable(NEXPending):
+    """Some monthly requests timed out; completed months can still be resumed."""
+
+
+def _transient_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status in {408, 429, 500, 502, 503, 504}:
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in ("timed out", "timeout", "deadline exceeded", "connection reset", "temporarily unavailable"))
+
+
 def nex_models() -> tuple[str, ...]:
     models = tuple(dict.fromkeys(x.strip() for x in os.getenv("FIELD_SHIFT_NEX_MODELS", ",".join(DEFAULT_NEX_MODELS)).split(",") if x.strip()))
     if not models or len(models) > 10:
@@ -54,6 +68,7 @@ class NEXDeltaResult:
     retrieved_at: str | None = None
     age_seconds: int | None = None
     error: str | None = None
+    retry_after_seconds: int | None = None
 
 
 def gee_credentials_configured() -> bool:
@@ -290,7 +305,7 @@ def _initialise_ee():
                 scopes=["https://www.googleapis.com/auth/earthengine", "https://www.googleapis.com/auth/cloud-platform"],
             )
             ee.Initialize(credentials, project=os.environ["FIELD_SHIFT_GEE_PROJECT"].strip())
-            ee.data.setDeadline(max(5000, min(60000, int(os.getenv("FIELD_SHIFT_GEE_REQUEST_TIMEOUT_SECONDS", "20")) * 1000)))
+            ee.data.setDeadline(max(5000, min(60000, int(os.getenv("FIELD_SHIFT_GEE_REQUEST_TIMEOUT_SECONDS", "45")) * 1000)))
             ee.data.setMaxRetries(0)
             _EE_INITIALIZED = True
     return ee
@@ -364,8 +379,11 @@ def _fetch_monthly_normals(lat: float, lon: float, scenario: str, cache_dir: str
                 errors.append(exc)
     count = sum(len(v) for v in normals.values())
     if count != 24:
+        permanent_errors = [error for error in errors if not _transient_error(error)]
+        if permanent_errors:
+            raise permanent_errors[0]
         if errors:
-            raise errors[0]
+            raise NEXRetryable(f"Computed {count}/24 monthly normals; a temporary Earth Engine request failed ({safe_error(errors[0])}). Refresh resumes missing months; completed months are cached on this server instance.")
         raise NEXPending(f"Computed {count}/24 monthly normals; refresh to resume. Partial results are cached on this server instance.")
     return normals
 
@@ -402,8 +420,10 @@ def nex_gddp_monthly_deltas(
         retrieved_at = datetime.now(UTC).isoformat()
         _write_cache(cache_path, {"monthly": monthly, "retrieved_at": retrieved_at})
         return NEXDeltaResult(monthly, "live", retrieved_at)
+    except NEXRetryable as exc:
+        return NEXDeltaResult(None, "retrying", error=str(exc), retry_after_seconds=60)
     except NEXPending as exc:
-        return NEXDeltaResult(None, "pending", error=str(exc))
+        return NEXDeltaResult(None, "pending", error=str(exc), retry_after_seconds=30)
     except Exception as exc:
         if cached and age is not None:
             try:
@@ -412,5 +432,7 @@ def nex_gddp_monthly_deltas(
                     return NEXDeltaResult(monthly, "stale-cache", cached.get("retrieved_at"), age, type(exc).__name__)
             except (KeyError, TypeError, ValueError):
                 pass
-        # Do not surface provider response text here: it may contain auth or account details.
+        if _transient_error(exc):
+            return NEXDeltaResult(None, "retrying", error=safe_error(exc), retry_after_seconds=60)
+        # Redact credentials/account details from the provider response.
         return NEXDeltaResult(None, "unavailable", error=safe_error(exc))

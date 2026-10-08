@@ -1,4 +1,4 @@
-const CACHE = 'fieldshift-shell-v40-date-range';
+const CACHE = 'fieldshift-shell-v41-provider-retry';
 const ASSETS = ['/', '/api/demo'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(['/'])));

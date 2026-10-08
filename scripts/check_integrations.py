@@ -35,10 +35,13 @@ def main():
         print(f"Attempt {attempt + 1}: {result['run']['status']}")
         for item in evidence:
             print(f"  {item['name']}: {item['status']} | {item.get('error') or item.get('coverage') or ''}")
-        if not any(item["status"] == "pending" for item in evidence):
+        waiting = [item for item in evidence if item["status"] in {"pending", "retrying"}]
+        if not waiting:
             break
         if attempt + 1 < args.attempts:
-            time.sleep(15)
+            delay = max(30, *(int(item.get("retry_after_seconds") or 30) for item in waiting))
+            print(f"Next check in {delay}s.")
+            time.sleep(delay)
     Path(args.out).write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"Saved {args.out}")
     nasa = [item for item in evidence if item["name"].startswith("NASA ")]

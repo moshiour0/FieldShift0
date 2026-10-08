@@ -523,10 +523,13 @@ def load_scenarios(field: FieldV2, year: int, input_dir: Path | None, datasets: 
             "status": gee_result.status,
             "coverage": f"No {path.name} scenario file or usable GEE response was available; the selected scenario remains an explicitly labelled diagnostic stress test, not NASA projection data.",
             "setup_hint": (
+                "Keep this analysis open for the next check. Completed monthly calculations are reused on this server instance."
+                if gee_result.status in {"pending", "retrying"} else
                 "Configure FIELD_SHIFT_GEE_PROJECT and FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON for the server-side Earth Engine connector, "
                 f"or supply a coordinate-matched {path.name} file."
             ),
             "error": gee_result.error,
+            "retry_after_seconds": gee_result.retry_after_seconds,
         })
     return scenarios
 
@@ -821,7 +824,7 @@ def run_v3(
                 "confidence": 0.35 if pilot_soil else 0.10,
                 "coverage": (
                     "Mymensingh pilot estimate used for unentered soil properties" if pilot_soil
-                    else "No Bangladesh-wide field soil dataset was supplied; Mymensingh soil values were excluded at this location"
+                    else "No local field soil profile was supplied for this location; generic physical defaults are used for missing properties"
                 ),
                 "fallback": "Enter a soil-test report or a clearly labeled field estimate; the model uses generic physical defaults for missing properties",
             })

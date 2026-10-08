@@ -1,4 +1,4 @@
-> **7 October 2026 dataset repair (3.1.2):** Start with [FIXES_AND_DEPLOYMENT.md](FIXES_AND_DEPLOYMENT.md) for the changes, custom dates, environment settings and production smoke checks. Live credentialed results still require post-deploy verification.
+> **8 October 2026 provider repair (3.1.3):** Start with [FIXES_AND_DEPLOYMENT.md](FIXES_AND_DEPLOYMENT.md). This update addresses AppEEARS request bursts and task-list compatibility, resumes temporary GEE timeouts, and fixes mobile evidence-card overflow. Custom dates are included. Live credentialed results still require post-deploy verification.
 
 # FieldShift V3 — scientific decision-support engine
 

@@ -36,9 +36,15 @@ def main():
         result = appeears_point_timeseries(args.lat, args.lon, start, end, cache_dir=cache, max_wait_seconds=0)
         for item in result.datasets:
             print(f"{item['name']}: {item['status']} | {item.get('error') or item.get('coverage')}")
-        if not any(item["status"] == "pending" for item in result.datasets) or time.monotonic() >= deadline:
+        waiting = [item for item in result.datasets if item["status"] in {"pending", "retrying"}]
+        if not waiting or time.monotonic() >= deadline:
             break
-        time.sleep(min(10, max(0, deadline - time.monotonic())))
+        delay = max(30, *(int(item.get("retry_after_seconds") or 30) for item in waiting))
+        if delay >= deadline - time.monotonic():
+            print(f"NASA requires another {delay}s before checking; run this command again later to resume.")
+            break
+        print(f"Next check in {delay}s.")
+        time.sleep(delay)
     output = {"start_date": start.isoformat(), "end_date": end.isoformat(), "results": result.datasets,
               "usable_rows": len(result.remote), "note": "Uses the production adapter, including pixel QA and real numeric-value parsing."}
     Path(args.out).write_text(json.dumps(output, indent=2), encoding="utf-8")

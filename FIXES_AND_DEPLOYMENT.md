@@ -1,8 +1,54 @@
-# Dataset integration repair — 7 October 2026
+# Dataset integration repair — 8 October 2026
 
 This archive contains the complete corrected project. Deploy the folder containing
 `vercel.json`, `pyproject.toml`, `api/`, `src/`, `config/`, and `data/`.
-The new API product version is **3.1.2**.
+The new API product version is **3.1.3**.
+
+## Follow-up: Mymensingh and Iowa errors
+
+The new screenshots show AppEEARS HTTP 500 for multiple products at both
+locations, plus HTTP 429 in Mymensingh. Iowa also shows an Earth Engine
+20-second read timeout for both NEX scenarios. These are request failures;
+the screenshots do not establish that the locations have no satellite coverage.
+
+This update makes the following changes:
+
+- Use one unfiltered `GET /task` and match stable task names locally. The older
+  connector sent `task_type=point` as a query filter once per product. Removing
+  that unnecessary filter is a compatibility repair; the screenshots omit the
+  failing endpoint, so the precise cause of their upstream 500 is not proven.
+- Submit/process SMAP, MODIS and HLS separately but sequentially, with a
+  one-second gap between HTTP requests, including downloads. Cache the product
+  catalog and layer metadata for one hour. Preserve existing v4 task identities
+  to resume already submitted requests.
+- Honor `Retry-After` for HTTP 429 and transient errors. HTTP 5xx and connection
+  timeouts also receive a cooldown. Persist the cooldown per account on the
+  server filesystem; no requests are sent during that cooldown. A failed task
+  POST is not blindly repeated. The next pass checks for an existing task first.
+- Show temporary failures as `retrying`, retain the HTTP code and request stage,
+  and have the website and both smoke scripts wait before retrying. The browser
+  waits at least 30 seconds, up to 20 automatic checks. Manual checks respect
+  the same wait. `available` still requires real, quality-filtered observations.
+- Treat GEE timeouts as resumable: keep completed monthly normals and request
+  only missing months on the next pass. Increase the default per-request GEE
+  timeout to 45 seconds. Missing bands and other permanent failures still show
+  `unavailable`; no diagnostic scenario is relabeled as NASA data.
+- Let long provider errors wrap inside mobile evidence cards; move map controls
+  away from the zoom buttons. Use location-neutral wording for missing soil data.
+
+**No existing environment variable was renamed or removed.** No new variable
+is required for this update. Keep your current credentials. If Vercel already
+has `FIELD_SHIFT_GEE_REQUEST_TIMEOUT_SECONDS=20`, change its value to **45**;
+an existing environment setting overrides the new code default. Keep
+`FIELD_SHIFT_APPEEARS_WAIT_SECONDS=0`. Then redeploy and confirm `/health`
+reports product **3.1.3**. Reopen/reload the site so its updated service worker
+can activate.
+
+For the Iowa location in the screenshot, use **41.4594, -93.0862**. The test
+script supports `--lat 41.4594 --lon -93.0862` for either smoke-test command.
+Start with 1–15 January 2025 to compare against the working SMAP script, then
+test the full year. SoilGrids remains optional; no local soil test means an
+explicit generic/pilot soil fallback, not a NASA connection failure.
 
 ## What the review established
 
@@ -24,7 +70,7 @@ Confirmed code defects and repairs:
 | Product dates | Selected the preferred product without considering its temporal extent | Choose the supported product with the best date overlap, then the configured preference; intersect requests with published availability and label partial coverage |
 | SMAP | Namespace-aware matching already existed in the supplied ZIP, but lived inside the shared workflow | Preserve the working `Geophysical_Data_sm_surface` / `sm_rootzone` matching in an independent production task; accept timestamped CSV dates and require actual moisture values |
 | GPM evidence | AppEEARS failure created an unavailable GPM entry even when Earth Engine succeeded | GPM uses its own route and has one evidence entry; partial date coverage is labeled |
-| Pending jobs | No automatic website follow-up; unhelpful pending coverage | Browser checks pending sources every 15 seconds, up to 20 checks; supports stop/check-now; stable NASA task names support reuse after a cold start |
+| Pending jobs | No automatic website follow-up; unhelpful pending coverage | Browser checks pending/retrying sources after at least 30 seconds, respecting provider delays, up to 20 checks; supports stop/check-now; stable NASA task names support reuse after a cold start |
 | Failed/expired tasks | Failed account tasks could be reused indefinitely | Adapter-versioned task names and cache keys; failed-task cooldown is ten minutes; expired or missing local task references are re-resolved |
 | NEX calculation | One large graph repeatedly aggregated all models and six bands across two 20-year periods; relied on a band-name property filter | Monthly point requests, masked missing-band handling, a disclosed model subset, bounded work per request, cached partial normals, and shared historical normals between SSPs |
 | GPM empty dates | Summing an empty collection could produce a bandless image and fail rename | Masked seed band keeps empty dates safe; only days with 48 valid half-hour values are accepted; mm/hour × 0.5 is retained |
@@ -46,7 +92,7 @@ backend modules.
 2. Check the exact environment names below in the active Production/Preview
    environment. Redeploy after changing them. A Termux environment variable or
    a Code Editor login does not configure the deployed Python function.
-3. Open `/health`; `product` should be `3.1.2`. Open `/api/status` to check whether
+3. Open `/health`; `product` should be `3.1.3`. Open `/api/status` to check whether
    credentials are present. That endpoint does not validate them remotely.
 4. For a like-for-like check, enter latitude **24.7471**, longitude **90.4203**,
    choose **Custom dates**, then **2025-01-01** through **2025-01-15**. Click
@@ -65,7 +111,7 @@ backend modules.
 | `FIELD_SHIFT_APPEEARS_WAIT_SECONDS` | **`0`**; the browser resumes pending jobs |
 | `FIELD_SHIFT_GEE_PROJECT` | Your Earth Engine-enabled Google Cloud project ID |
 | `FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON` | The complete service-account JSON, as a server-side environment value |
-| `FIELD_SHIFT_GEE_REQUEST_TIMEOUT_SECONDS` | `20` |
+| `FIELD_SHIFT_GEE_REQUEST_TIMEOUT_SECONDS` | `45`; update an existing `20` setting |
 | `FIELD_SHIFT_NEX_BUDGET_SECONDS` | `40` per scenario, plus in-flight request time |
 | `FIELD_SHIFT_NEX_MODELS` | `ACCESS-CM2,MPI-ESM1-2-HR,MRI-ESM2-0` |
 | `FIELD_SHIFT_SOILGRIDS` | Keep `0` unless you have separately verified that provider; NASA fixes do not make this optional service available |
@@ -119,7 +165,7 @@ field information removed, if a source still fails. Do not share credentials.
   Changing `FIELD_SHIFT_NEX_MODELS` changes the cache identity; use a separate
   offline/batch workflow if you need a full-ensemble scientific assessment.
 - AppEEARS tasks can be recovered from NASA's account task list across Vercel
-  instances. Partial NEX caches and analysis history are local to an instance;
+  instances. AppEEARS cooldowns, partial NEX caches and analysis history are local to an instance;
   cold starts may recompute them. A shared cache/database is still needed for
   durable history and consistent progress at larger scale.
 

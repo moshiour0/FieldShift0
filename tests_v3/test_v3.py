@@ -235,7 +235,7 @@ class TestV3NASAAndLineage(unittest.TestCase):
             found = _find_recent_task("token", "fieldshift-test", selections, timeout=10)
         self.assertEqual(found, task)
         request.assert_called_once_with(
-            "task?task_type=point&limit=100&offset=0", token="token", timeout=10,
+            "task", token="token", timeout=10,
         )
 
     def test_appeears_status_keeps_applied_qa_after_sampling(self):
@@ -250,7 +250,7 @@ class TestV3NASAAndLineage(unittest.TestCase):
                 return []  # Discovery is mocked below; catalog is fetched once per run.
             if path == "login":
                 return {"token": "short-lived-test-token"}
-            if path.startswith("task?"):
+            if path == "task" and kwargs.get("method", "GET") == "GET":
                 return []
             if path == "task" and kwargs.get("method") == "POST":
                 return {"task_id": "task-123"}

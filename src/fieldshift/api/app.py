@@ -31,7 +31,7 @@ except ImportError as exc:  # pragma: no cover
 APP_ROOT = Path(__file__).resolve().parent
 app = FastAPI(
     title="FieldShift V3 Product API",
-    version="3.1.2",
+    version="3.1.3",
     description="Farmer-facing evidence-aware crop rotation decision support",
 )
 
@@ -46,7 +46,7 @@ def _jsonable(run) -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "engine": "3.0.0", "product": "3.1.2"}
+    return {"status": "ok", "engine": "3.0.0", "product": "3.1.3"}
 
 
 @app.get("/api/status")

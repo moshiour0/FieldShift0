@@ -20,9 +20,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -37,10 +37,113 @@ _TOKEN_GUARD = threading.Lock()
 _TOKEN_VALUE: str | None = None
 _TOKEN_EXPIRATION_TS: float = 0.0
 _TOKEN_SOURCE: str | None = None
+_REQUEST_GUARD = threading.Lock()
+_NEXT_REQUEST_AT = 0.0
+_MIN_REQUEST_INTERVAL = 1.0
 
 
 class AppEEARSDataError(RuntimeError):
     """Raised when AppEEARS cannot provide an authenticated point sample."""
+
+    def __init__(self, message: str, *, stage: str | None = None, http_status: int | None = None):
+        super().__init__(message)
+        self.stage = stage
+        self.http_status = http_status
+
+
+class AppEEARSRetryableError(AppEEARSDataError):
+    """A temporary provider failure; never retry a task POST blindly."""
+
+    def __init__(self, message: str, *, retry_after_seconds: int = 60, **kwargs):
+        super().__init__(message, **kwargs)
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _request_stage(path: str, method: str) -> str:
+    parts = path.split("?", 1)[0].strip("/").split("/")
+    if parts[0] == "task":
+        return "task-submission" if method == "POST" else "task-status" if len(parts) > 1 else "task-list"
+    if parts[0] == "product":
+        return "layer-metadata" if len(parts) > 1 else "product-catalog"
+    if parts[0] == "bundle":
+        return "file-download" if len(parts) > 2 else "bundle-list"
+    return "login" if parts[0] == "login" else "provider-request"
+
+
+def _retry_delay(header: str | None, default: int) -> int:
+    """Retry-After is either delay-seconds or an HTTP date."""
+    try:
+        if header and header.strip().isdigit():
+            return max(1, int(header))
+        if header:
+            retry_at = parsedate_to_datetime(header)
+            return max(1, math.ceil(retry_at.timestamp() - time.time()))
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return default
+
+
+def _cooldown_path() -> Path:
+    account = os.getenv("FIELD_SHIFT_APPEEARS_USER", "").strip() or os.getenv("FIELD_SHIFT_APPEEARS_TOKEN", "")
+    key = hashlib.sha256(account.encode()).hexdigest()[:24]
+    root = Path(os.getenv("FIELD_SHIFT_CACHE_DIR") or str(Path(tempfile.gettempdir()) / "fieldshift-appeears"))
+    return root / f"appeears_cooldown_{key}.json"
+
+
+def _check_cooldown() -> None:
+    try:
+        saved = json.loads(_cooldown_path().read_text(encoding="utf-8"))
+        remaining = math.ceil(float(saved["until"]) - time.time())
+    except (OSError, ValueError, TypeError, KeyError):
+        return
+    if remaining > 0:
+        raise AppEEARSRetryableError(
+            str(saved["message"]), stage=saved.get("stage"), http_status=saved.get("http_status"),
+            retry_after_seconds=remaining,
+        )
+
+
+def _remember_cooldown(exc: AppEEARSRetryableError) -> None:
+    _write_json(_cooldown_path(), {
+        "until": time.time() + exc.retry_after_seconds, "stage": exc.stage,
+        "http_status": exc.http_status, "message": safe_error(exc),
+    })
+
+
+def _open_bytes(request: urllib.request.Request, stage: str, timeout: int) -> bytes:
+    """Pace all calls, including downloads, and honor the provider cooldown.
+
+    Cooldowns survive requests on the same server filesystem. Separate cold
+    serverless instances cannot share this file; the UI also honors Retry-After.
+    """
+    global _NEXT_REQUEST_AT
+    with _REQUEST_GUARD:
+        _check_cooldown()
+        delay = _NEXT_REQUEST_AT - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in {401, 403}:
+                raise  # Authentication is refreshed outside the request lock.
+            detail = exc.read(512).decode("utf-8", "replace")
+            message = f"AppEEARS {stage} returned HTTP {exc.code}: {detail[:300]}"
+            if exc.code in {408, 429} or 500 <= exc.code < 600:
+                retry = AppEEARSRetryableError(
+                    message, stage=stage, http_status=exc.code,
+                    retry_after_seconds=_retry_delay(exc.headers.get("Retry-After"), 60 if exc.code == 429 else 30),
+                )
+                _remember_cooldown(retry)
+                raise retry from exc
+            raise AppEEARSDataError(message, stage=stage, http_status=exc.code) from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            retry = AppEEARSRetryableError(f"AppEEARS {stage} connection failed: {safe_error(exc)}", stage=stage, retry_after_seconds=30)
+            _remember_cooldown(retry)
+            raise retry from exc
+        finally:
+            _NEXT_REQUEST_AT = time.monotonic() + _MIN_REQUEST_INTERVAL
 
 
 @dataclass(frozen=True)
@@ -166,7 +269,7 @@ def _login_token(*, timeout: int = 25, force: bool = False) -> str:
         return _TOKEN_VALUE
 
 
-def _safe_json_request(
+def _request_bytes(
     path: str,
     *,
     method: str = "GET",
@@ -175,7 +278,7 @@ def _safe_json_request(
     auth: tuple[str, str] | None = None,
     timeout: int = 25,
     _allow_token_refresh: bool = True,
-) -> Any:
+) -> bytes:
     headers = {"User-Agent": "FieldShift/3.2 NASA AppEEARS connector"}
     body = None
     if token:
@@ -189,56 +292,52 @@ def _safe_json_request(
         body = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(f"{APPEEARS_API}{path.lstrip('/')}", data=body, headers=headers, method=method)
+    stage = _request_stage(path, method)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read()
+        return _open_bytes(request, stage, timeout)
     except urllib.error.HTTPError as exc:
         # NASA AppEEARS documents 403 as the signal to reacquire an expired
         # Bearer token. Refresh at most once for a secure request.
         if exc.code in {401, 403} and token and _allow_token_refresh:
             _clear_token()
             fresh = _login_token(timeout=timeout, force=True)
-            return _safe_json_request(
+            return _request_bytes(
                 path, method=method, token=fresh, payload=payload, auth=None, timeout=timeout, _allow_token_refresh=False,
             )
         detail = exc.read(512).decode("utf-8", "replace")
-        raise AppEEARSDataError(f"AppEEARS returned HTTP {exc.code}: {detail[:300]}") from exc
+        raise AppEEARSDataError(f"AppEEARS {stage} returned HTTP {exc.code}: {detail[:300]}", stage=stage, http_status=exc.code) from exc
+    except AppEEARSDataError:
+        raise
     except Exception as exc:
-        raise AppEEARSDataError(f"AppEEARS request failed: {safe_error(exc)}") from exc
+        raise AppEEARSDataError(f"AppEEARS {stage} request failed: {safe_error(exc)}", stage=stage) from exc
+
+
+def _safe_json_request(path: str, **kwargs) -> Any:
+    raw = _request_bytes(path, **kwargs)
     try:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise AppEEARSDataError("AppEEARS returned an invalid JSON response") from exc
+        stage = _request_stage(path, kwargs.get("method", "GET"))
+        raise AppEEARSDataError(f"AppEEARS {stage} returned an invalid JSON response", stage=stage) from exc
 
 
 def _download(path: str, token: str, timeout: int = 40) -> bytes:
-    """Download a completed AppEEARS bundle file, refreshing an expired token once."""
-    def fetch(active_token: str) -> bytes:
-        request = urllib.request.Request(
-            f"{APPEEARS_API}{path.lstrip('/')}",
-            headers={
-                "Authorization": f"Bearer {active_token}",
-                "User-Agent": "FieldShift/3.2 NASA AppEEARS connector",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+    return _request_bytes(path, token=token, timeout=timeout)
 
-    try:
-        return fetch(token)
-    except urllib.error.HTTPError as exc:
-        if exc.code in {401, 403}:
-            _clear_token()
-            try:
-                fresh = _login_token(timeout=min(timeout, 25), force=True)
-                return fetch(fresh)
-            except Exception as refresh_exc:
-                raise AppEEARSDataError(
-                    f"AppEEARS file download failed after token refresh: {type(refresh_exc).__name__}"
-                ) from refresh_exc
-        raise AppEEARSDataError(f"AppEEARS file download failed: HTTP {exc.code}") from exc
-    except Exception as exc:
-        raise AppEEARSDataError(f"AppEEARS file download failed: {type(exc).__name__}") from exc
+
+def _metadata_request(path: str, token: str, timeout: int, cache_dir: Path | None = None) -> Any:
+    """Catalog/layers change slowly; don't re-fetch them on every status poll."""
+    cache_path = cache_dir / f"appeears_metadata_{hashlib.sha256(path.encode()).hexdigest()[:24]}.json" if cache_dir else None
+    if cache_path:
+        try:
+            if time.time() - cache_path.stat().st_mtime < 3600:
+                return json.loads(cache_path.read_text(encoding="utf-8"))["value"]
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+    value = _safe_json_request(path, token=token, timeout=timeout)
+    if cache_path and isinstance(value, (list, dict)):
+        _write_json(cache_path, {"value": value})
+    return value
 
 
 def _product_matches(definition: SourceDefinition, product: dict[str, Any]) -> bool:
@@ -282,9 +381,10 @@ def _first_layer(layers: dict[str, Any], aliases: tuple[str, ...]) -> str | None
 def discover_layers(
     token: str, timeout: int = 25, *, source_key: str | None = None,
     start: date | None = None, end: date | None = None, products=None,
+    cache_dir: Path | None = None,
 ) -> tuple[LayerSelection, ...]:
     if products is None:
-        products = _safe_json_request("product", token=token, timeout=timeout)
+        products = _metadata_request("product", token, timeout, cache_dir)
     if not isinstance(products, list):
         raise AppEEARSDataError("AppEEARS product catalog has an unexpected format")
     selected: list[LayerSelection] = []
@@ -308,7 +408,9 @@ def discover_layers(
                 continue
             product_id = str(product.get("ProductAndVersion", ""))
             try:
-                layer_map = _safe_json_request(f"product/{urllib.parse.quote(product_id, safe='.')}", token=token, timeout=timeout)
+                layer_map = _metadata_request(f"product/{urllib.parse.quote(product_id, safe='.')}", token, timeout, cache_dir)
+            except AppEEARSRetryableError:
+                raise  # Trying more products during a provider cooldown causes more 429s.
             except AppEEARSDataError as exc:
                 errors.append(safe_error(exc))
                 continue
@@ -391,6 +493,7 @@ def _task_is_reusable(task: dict[str, Any]) -> bool:
 
 def _find_recent_task(
     token: str, task_name: str, selections: tuple[LayerSelection, ...], *, timeout: int,
+    task_index: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Find this AppEEARS request in the account task list after serverless cache loss.
 
@@ -398,31 +501,31 @@ def _find_recent_task(
     list is the authoritative fallback that prevents each analysis from creating
     another queued job and notification for the same field request.
     """
+    # Use the documented unfiltered GET /task, then match locally. The older
+    # filtered query is unnecessary; omit it for endpoint compatibility.
+    # Share the response across sources instead of listing this account 3 times.
+    index = task_index if task_index is not None else {}
+    if "tasks" not in index:
+        tasks = _safe_json_request("task", token=token, timeout=timeout)
+        if not isinstance(tasks, list):
+            raise AppEEARSDataError("AppEEARS task list returned an unexpected format", stage="task-list")
+        index["tasks"] = sorted((t for t in tasks if isinstance(t, dict)), key=lambda t: str(t.get("created", "")), reverse=True)
     limit = max(1, min(200, int(os.getenv("FIELD_SHIFT_APPEEARS_TASK_SCAN_LIMIT", "100"))))
     pages = max(1, min(10, int(os.getenv("FIELD_SHIFT_APPEEARS_TASK_SCAN_PAGES", "3"))))
-    for page in range(pages):
-        offset = page * limit
-        tasks = _safe_json_request(
-            f"task?task_type=point&limit={limit}&offset={offset}", token=token, timeout=timeout,
-        )
-        if not isinstance(tasks, list):
-            raise AppEEARSDataError("AppEEARS task list returned an unexpected format")
-        for task in tasks:
-            if not isinstance(task, dict) or task.get("task_name") != task_name or not _task_is_reusable(task):
+    for task in index["tasks"][:limit * pages]:
+        if task.get("task_name") != task_name or task.get("task_type", "point") != "point" or not _task_is_reusable(task):
+            continue
+        params = task.get("params")
+        existing_layers = params.get("layers") if isinstance(params, dict) else None
+        if isinstance(existing_layers, list):
+            requested = sorted((item.product, item.layer) for item in selections)
+            available = sorted(
+                (str(item.get("product", "")), str(item.get("layer", "")))
+                for item in existing_layers if isinstance(item, dict)
+            )
+            if available and available != requested:
                 continue
-            params = task.get("params")
-            existing_layers = params.get("layers") if isinstance(params, dict) else None
-            if isinstance(existing_layers, list):
-                requested = sorted((item.product, item.layer) for item in selections)
-                available = sorted(
-                    (str(item.get("product", "")), str(item.get("layer", "")))
-                    for item in existing_layers if isinstance(item, dict)
-                )
-                if available and available != requested:
-                    continue
-            return task
-        if len(tasks) < limit:
-            break
+        return task
     return None
 
 
@@ -654,9 +757,10 @@ def _source_statuses(selections: tuple[LayerSelection, ...], status: str, covera
 def _sample_source(
     definition: SourceDefinition, token: str, products: list, lat: float, lon: float,
     start: date, end: date, cache_dir: Path, timeout: int, max_wait_seconds: int,
+    task_index: dict[str, Any] | None = None,
 ) -> AppEEARSResult:
     key, name = definition["key"], definition["name"]
-    selections = discover_layers(token, timeout, source_key=key, start=start, end=end, products=products)
+    selections = discover_layers(token, timeout, source_key=key, start=start, end=end, products=products, cache_dir=cache_dir)
     selections = tuple(x for x in selections if x.source_key == key)
 
     def result(status, coverage, remote=(), **extra):
@@ -682,6 +786,7 @@ def _sample_source(
                       retrieval_mode="cache", quality_status=stored.get("quality_status"), quality_note=stored.get("quality_note"),
                       retrieval_date=stored.get("retrieval_date"), cache_age_seconds=int(age or 0))
     task_id = ""
+    task = None
     with _task_lock(task_name):
         try:
             pending = json.loads(pending_path.read_text())
@@ -691,6 +796,7 @@ def _sample_source(
                     task = _safe_json_request(f"task/{urllib.parse.quote(task_id, safe='-')}", token=token, timeout=timeout)
                     if not _task_is_reusable(task):
                         task_id = ""
+                        task = None
                 except AppEEARSDataError as exc:
                     if "HTTP 404" not in str(exc):
                         raise
@@ -698,8 +804,9 @@ def _sample_source(
         except (OSError, ValueError, TypeError, KeyError):
             pass
         if not task_id:
-            existing = _find_recent_task(token, task_name, selections, timeout=timeout)
+            existing = _find_recent_task(token, task_name, selections, timeout=timeout, task_index=task_index)
             task_id = str(existing.get("task_id", "")) if existing else ""
+            task = existing
         if not task_id:
             payload = {"task_type": "point", "task_name": task_name, "params": {
                 "dates": [{"startDate": start.strftime("%m-%d-%Y"), "endDate": end.strftime("%m-%d-%Y")}],
@@ -710,10 +817,13 @@ def _sample_source(
             task_id = str(submitted.get("task_id", ""))
             if not task_id:
                 raise AppEEARSDataError("AppEEARS did not return a task identifier.")
+            task = None
+            if task_index is not None:
+                task_index.setdefault("tasks", []).insert(0, {**payload, **submitted})
         _write_json(pending_path, {"task_id": task_id, "task_name": task_name, "created": time.time()})
     deadline = time.monotonic() + max_wait_seconds
     while True:
-        task = _safe_json_request(f"task/{urllib.parse.quote(task_id, safe='-')}", token=token, timeout=timeout)
+        task = task or _safe_json_request(f"task/{urllib.parse.quote(task_id, safe='-')}", token=token, timeout=timeout)
         status = str(task.get("status", "unknown")).lower()
         if status == "done":
             break
@@ -722,8 +832,9 @@ def _sample_source(
             detail = safe_error(AppEEARSDataError(str(task.get("error") or task.get("message") or status)))
             return result("unavailable", f"This {key} task ended with status {status}; the other products run independently.", error=detail)
         if time.monotonic() >= deadline:
-            return result("pending", f"NASA is {status} this point sample. Refreshing resumes the same task.", retry_after_seconds=15)
-        time.sleep(min(3, max(0, deadline - time.monotonic())))
+            return result("pending", f"NASA is {status} this point sample. Refreshing resumes the same task.", retry_after_seconds=30)
+        time.sleep(min(10, max(0, deadline - time.monotonic())))
+        task = None
     bundle = _safe_json_request(f"bundle/{task_id}", token=token, timeout=timeout)
     csv_files = []
     for item in bundle.get("files", []):
@@ -759,22 +870,28 @@ def appeears_point_timeseries(
     max_days = max(1, min(366, int(os.getenv("FIELD_SHIFT_APPEEARS_MAX_DAYS", "366"))))
     if (end - start).days + 1 > max_days:
         raise ValueError(f"AppEEARS date range exceeds configured limit of {max_days} days; shorten the range.")
+    def failure(definition, exc):
+        retry = isinstance(exc, AppEEARSRetryableError)
+        return {"name": definition["name"], "source_type": "satellite", "status": "retrying" if retry else "unavailable",
+                "error": safe_error(exc), "request_stage": getattr(exc, "stage", None),
+                "http_status": getattr(exc, "http_status", None), "retry_after_seconds": getattr(exc, "retry_after_seconds", None),
+                "coverage": "Waiting before retrying a temporary NASA request failure; no observations have been substituted." if retry
+                else "This product request failed; other datasets continue independently."}
+
     try:
         token = _login_token(timeout=timeout)
-        products = _safe_json_request("product", token=token, timeout=timeout)
+        products = _metadata_request("product", token, timeout, Path(cache_dir))
     except Exception as exc:
-        return AppEEARSResult((), tuple({"name": d["name"], "source_type": "satellite", "status": "unavailable",
-                                        "error": safe_error(exc), "coverage": "Earthdata login or product catalog request failed."}
-                                       for d in SOURCE_DEFINITIONS))
+        return AppEEARSResult((), tuple(failure(d, exc) for d in SOURCE_DEFINITIONS))
     wait = max_wait_seconds if max_wait_seconds is not None else int(os.getenv("FIELD_SHIFT_APPEEARS_WAIT_SECONDS", "0"))
+    task_index: dict[str, Any] = {}
 
     def sample(definition):
         try:
-            return _sample_source(definition, token, products, lat, lon, start, end, Path(cache_dir), timeout, max(0, min(30, wait)))
+            return _sample_source(definition, token, products, lat, lon, start, end, Path(cache_dir), timeout, max(0, min(30, wait)), task_index)
         except Exception as exc:
-            return AppEEARSResult((), ({"name": definition["name"], "source_type": "satellite", "status": "unavailable",
-                                       "error": safe_error(exc), "coverage": "This product request failed; other datasets continue independently."},))
+            return AppEEARSResult((), (failure(definition, exc),))
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        results = list(pool.map(sample, SOURCE_DEFINITIONS))
+    # NASA tasks remain independent, but HTTP requests are paced sequentially.
+    results = [sample(definition) for definition in SOURCE_DEFINITIONS]
     return AppEEARSResult(tuple(row for r in results for row in r.remote), tuple(item for r in results for item in r.datasets))

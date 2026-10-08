@@ -37,16 +37,17 @@ CSVS = {
 class NASAService:
     def __init__(self, failure=None, pending=False):
         self.failure, self.pending = failure, pending
-        self.tasks, self.payloads = {}, []
+        self.tasks, self.payloads, self.calls = {}, [], []
 
     def request(self, path, **kwargs):
+        self.calls.append((path, kwargs.get("method", "GET")))
         if path == "login":
             return {"token": "mock-token"}
         if path == "product":
             return PRODUCTS
         if path.startswith("product/"):
             return LAYERS[path.split("/")[1]]
-        if path.startswith("task?"):
+        if path == "task" and kwargs.get("method", "GET") == "GET":
             return list(self.tasks.values())
         if path == "task":
             body = kwargs["payload"]
@@ -83,11 +84,15 @@ def test_three_independent_tasks_parse_namespaced_smap_and_cache(nasa, tmp_path)
     first = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path)
     assert {d["status"] for d in first.datasets} == {"available"}
     assert len(nasa.payloads) == 3
+    assert nasa.calls.count(("task", "GET")) == 1
+    assert not any("?" in path for path, _ in nasa.calls)
     assert all(len({l["product"] for l in p["params"]["layers"]}) == 1 for p in nasa.payloads)
     assert any(r.smap_rootzone_m3_m3 == 0.3 for r in first.remote)
     cached = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path)
     assert len(nasa.payloads) == 3
     assert {d["retrieval_mode"] for d in cached.datasets} == {"cache"}
+    assert nasa.calls.count(("product", "GET")) == 1
+    assert nasa.calls.count(("product/SPL4SMGP.008", "GET")) == 1
 
 
 def test_failed_smap_does_not_remove_hls_or_modis(nasa, tmp_path):
