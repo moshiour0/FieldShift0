@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#173f33">
+  <meta name="description" content="NASA Earth-observation evidence and the FieldShift crop-rotation model, explained through a Bengali learning lab.">
+  <title>KrishiNexus Learning Lab — মাঠের তথ্য দিয়ে শেখো</title>
+  <link rel="stylesheet" href="/school-game/style.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="FieldShift মূল অ্যাপ">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span><strong>KrishiNexus</strong><small>FIELD SHIFT · LEARNING LAB</small></span>
+      </a>
+      <a class="back-link" href="/">মূল FieldShift অ্যাপে ফিরুন <span aria-hidden="true">↗</span></a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot"></span> NASA DATA · FIELD-SHIFT ENGINE</p>
+          <h1>তথ্য দেখে সিদ্ধান্ত নাও।<br><em>মাঠের জন্য শিখে নাও।</em></h1>
+          <p class="hero-intro">একটি বাস্তব FieldShift analysis চালাও। NASA weather evidence, মাটির তথ্য এবং crop-rotation model কী বলছে—তা বুঝে পাঁচটি ছোট মিশন সম্পন্ন করো।</p>
+          <div class="hero-points">
+            <span><b>01</b> মাঠের ইনপুট</span><span><b>02</b> NASA evidence</span><span><b>03</b> মডেল তুলনা</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-label="কৃষিজমির সারিবদ্ধ ক্ষেতের চিত্র">
+          <div class="sun"></div><div class="cloud cloud-a"></div><div class="cloud cloud-b"></div>
+          <div class="hill hill-back"></div><div class="hill hill-front"></div>
+          <div class="field-lines"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="field-caption"><span>FIELD OBSERVATION</span><strong>Evidence before advice</strong></div>
+        </div>
+      </section>
+
+      <section class="setup-panel panel" aria-labelledby="setup-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">START HERE · ১ মিনিট</p><h2 id="setup-title">তোমার মাঠের তথ্য দাও</h2><p>কোনো নাম, ফোন নম্বর বা ব্যক্তিগত পরিচয় লাগবে না।</p></div>
+          <span class="step-count">STEP 01 / 03</span>
+        </div>
+
+        <form id="analysis-form" novalidate>
+          <div class="form-grid">
+            <label class="field field-wide">
+              <span>মডেল পাইলট এলাকা</span>
+              <select id="location-mode" name="location-mode">
+                <option value="mymensingh">ময়মনসিংহ পাইলট · reference point</option>
+                <option value="custom">নিজের স্থানাঙ্ক লিখব</option>
+              </select>
+              <small>ময়মনসিংহের crop/soil parameter pack-ই বর্তমানে স্থানীয় pilot baseline; অন্য স্থানে ফলাফল স্থানীয়ভাবে যাচাইকৃত নয়।</small>
+            </label>
+            <label class="field custom-field hidden" id="lat-field">
+              <span>অক্ষাংশ · Latitude</span><input id="latitude" type="number" min="-90" max="90" step="0.0001" value="24.75" inputmode="decimal">
+            </label>
+            <label class="field custom-field hidden" id="lon-field">
+              <span>দ্রাঘিমাংশ · Longitude</span><input id="longitude" type="number" min="-180" max="180" step="0.0001" value="90.41" inputmode="decimal">
+            </label>
+            <label class="field">
+              <span>জমির আয়তন · hectare</span><input id="area" type="number" min="0.01" max="10000" step="0.01" value="0.40" required inputmode="decimal">
+            </label>
+            <label class="field">
+              <span>জমির ধরন</span>
+              <select id="land-type"><option value="medium highland">মাঝারি উঁচু জমি</option><option value="highland">উঁচু জমি</option><option value="lowland">নিচু জমি</option><option value="medium lowland">মাঝারি নিচু জমি</option></select>
+            </label>
+            <label class="field">
+              <span>খের মৌসুমের ফসল</span>
+              <select id="previous-crop"><option value="Rice">ধান</option><option value="Wheat">গম</option><option value="Maize">ভুট্টা</option><option value="Lentil">মসুর</option><option value="Jute">পাট</option><option value="Vegetables">সবজি</option></select>
+            </label>
+            <label class="field">
+              <span>পরিবারের প্রধান লক্ষ্য</span>
+              <select id="priority"><option value="water">পানি ব্যবস্থাপনা</option><option value="soil">মাটির স্বাস্থ্য</option><option value="income">আয়ের সম্ভাবনা</option><option value="risk">ঝুঁকি কমানো</option><option value="yield">ফলন স্থিতিশীলতা</option><option value="labour">শ্রম ও কাজের সুবিধা</option></select>
+            </label>
+          </div>
+
+          <details class="soil-details">
+            <summary>মাটির পরীক্ষার তথ্য আছে? (ঐচ্ছিক)</summary>
+            <p>ল্যাব রিপোর্ট বা মাঠের অনুমান—কোনটি ব্যবহার করছ, সেটি ঠিকভাবে চিহ্নিত করো। ফাঁকা ঘরকে শূন্য ধরা হবে না।</p>
+            <div class="form-grid soil-grid">
+              <label class="field"><span>তথ্যের ধরন</span><select id="soil-source"><option value="farmer-estimate">কৃষকের মাঠ-অনুমান</option><option value="soil-test">ল্যাব soil test</option></select></label>
+              <label class="field"><span>Soil pH</span><input id="soil-ph" type="number" min="0" max="14" step="0.1" placeholder="যেমন 6.5"></label>
+              <label class="field"><span>জৈব কার্বন · SOC %</span><input id="soil-soc" type="number" min="0" max="20" step="0.01" placeholder="যেমন 1.2"></label>
+              <label class="field"><span>বালি · Sand %</span><input id="soil-sand" type="number" min="0" max="100" step="1" placeholder="যেমন 35"></label>
+              <label class="field"><span>পলি · Silt %</span><input id="soil-silt" type="number" min="0" max="100" step="1" placeholder="যেমন 40"></label>
+              <label class="field"><span>কাদা · Clay %</span><input id="soil-clay" type="number" min="0" max="100" step="1" placeholder="যেমন 25"></label>
+            </div>
+            <p class="field-hint" id="soil-hint">Texture দিলে Sand + Silt + Clay মোটামুটি ১০০% হতে হবে।</p>
+          </details>
+
+          <div class="form-grid constraint-grid">
+            <label class="field"><span>মৌসুমে পাওয়া পানি · mm</span><input id="water-available" type="number" min="0" max="5000" value="900"></label>
+            <label class="field"><span>সেচের নির্ভরযোগ্যতা</span><select id="irrigation-reliability"><option value="0.9">উচ্চ · ৯০%</option><option value="0.8" selected>মাঝারি · ৮০%</option><option value="0.6">কম · ৬০%</option><option value="0.4">খুব কম · ৪০%</option></select></label>
+          </div>
+          <div class="form-footer">
+            <p class="privacy-note"><span aria-hidden="true">◆</span> তথ্যটি analysis request-এ ব্যবহার হবে; এই Learning Lab-এ ব্যক্তিগত পরিচয় চাওয়া বা সংরক্ষণ করা হয় না।</p>
+            <button class="primary-button" id="run-analysis" type="submit"><span>বাস্তব analysis চালাও</span><span aria-hidden="true">→</span></button>
+          </div>
+          <div id="form-error" class="inline-error" role="alert"></div>
+        </form>
+      </section>
+
+      <section id="analysis-state" class="analysis-state panel hidden" aria-live="polite">
+        <div class="loading-mark"><span></span><span></span><span></span></div>
+        <div><strong id="loading-title">FieldShift analysis চলছে</strong><p id="loading-copy">ইনপুট যাচাই, NASA data request এবং crop-rotation calculation সম্পন্ন হচ্ছে।</p></div>
+      </section>
+
+      <section id="results" class="results hidden" aria-labelledby="results-title">
+        <div class="section-heading result-heading">
+          <div><p class="eyebrow">STEP 02 / 03 · EVIDENCE FIRST</p><h2 id="results-title">তোমার মাঠের analysis</h2><p id="result-subtitle"></p></div>
+          <button type="button" class="outline-button" id="rerun">নতুন analysis</button>
+        </div>
+
+        <div id="quality-banner" class="quality-banner" role="status"></div>
+        <div class="metric-grid" id="metric-grid"></div>
+
+        <div class="results-grid">
+          <section class="panel subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">SOURCE RECORD</p><h3>কোন তথ্য ব্যবহার হয়েছে?</h3></div><span id="source-count" class="count-pill"></span></div>
+            <div id="evidence-list" class="evidence-list"></div>
+            <p class="evidence-footnote">NASA POWER একটি gridded daily data source; এটি জমির sensor বা মাঠের মাটি পরীক্ষা নয়। অনুপস্থিত তথ্য শূন্য নয়।</p>
+          </section>
+          <section class="panel subpanel">
+            <div class="subpanel-heading"><div><p class="eyebrow">MODELLED OUTPUT</p><h3>শীর্ষ ৩টি crop strategy</h3></div></div>
+            <div id="strategy-list" class="strategy-list"></div>
+            <p class="model-note">এগুলো crop-rotation model-এর estimate ও ranking—মাপা ফলন, নিশ্চিত লাভ বা কৃষি কর্মকর্তার সুপারিশ নয়।</p>
+          </section>
+        </div>
+
+        <section id="mission-panel" class="mission-panel panel" aria-labelledby="missions-title">
+          <div class="section-heading"><div><p class="eyebrow">STEP 03 / 03 · APPLY WHAT YOU LEARNED</p><h2 id="missions-title">এবার পাঁচটি মিশন</h2><p>এখন তোমার analysis থেকেই পরশ্ন আসবে। প্রতিটি সঠিক উত্তরে শেখার পয়েন্ট পাবে।</p></div><div class="learning-score"><strong id="score">০</strong><span>শেখার পয়েন্ট</span></div></div>
+          <div class="mission-progress" aria-label="মিশনের অগ্রগতি"><div id="progress-fill"></div></div>
+          <div id="mission-card" class="mission-card"></div>
+          <div id="mission-feedback" class="mission-feedback" role="status" aria-live="polite"></div>
+          <div class="mission-actions"><span id="mission-number">মিশন ১ / ৫</span><button type="button" class="primary-button hidden" id="next-mission">পরের মিশন <span aria-hidden="true">→</span></button></div>
+        </section>
+      </section>
+
+      <section id="finish" class="finish-panel panel hidden" aria-labelledby="finish-title">
+        <p class="eyebrow">LEARNING JOURNEY COMPLETE</p><h2 id="finish-title">তুমি তথ্য দেখে সিদ্ধান্ত নিতে শিখেছ।</h2>
+        <p id="finish-summary"></p>
+        <div class="finish-score"><strong id="final-score">০</strong><span>শেখার পয়েন্ট</span></div>
+        <div class="report-card"><div class="report-title"><strong>পরিবারের সাথে আলোচনা</strong><span>FIELD SHIFT · LEARNING NOTE</span></div><pre id="family-report"></pre></div>
+        <div class="finish-actions"><button type="button" class="primary-button" id="print-report">আলোচনা কার্ড প্রিন্ট</button><button type="button" class="outline-button" id="play-again">আবার শুরু</button></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div><strong>KrishiNexus · FieldShift</strong><p>NASA Earth observations + transparent crop-rotation decision support.</p></div>
+      <div class="footer-links"><a href="https://power.larc.nasa.gov/docs/services/api/temporal/daily/" target="_blank" rel="noreferrer">NASA POWER documentation</a><a href="/">মূল FieldShift app</a></div>
+      <p class="disclaimer">NASA does not endorse this project. স্থানীয় কৃষি সিদ্ধান্তের আগে soil test, মাঠের অবস্থা এবং স্থানীয় কৃষি বিশেষজ্ঞের পরামর্শ যাচাই করো।</p>
+    </footer>
+  </div>
+  <script src="/school-game/game.js" defer></script>
+</body>
+</html>
