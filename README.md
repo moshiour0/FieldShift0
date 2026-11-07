@@ -1,6 +1,6 @@
 > **8 October 2026 provider repair (3.1.3):** Start with [FIXES_AND_DEPLOYMENT.md](FIXES_AND_DEPLOYMENT.md). This update addresses AppEEARS request bursts and task-list compatibility, resumes temporary GEE timeouts, and fixes mobile evidence-card overflow. Custom dates are included. Live credentialed results still require post-deploy verification.
 
-# FieldShift V3 — scientific decision-support engine
+# FieldShift V3.3 / KrishiNexus — NASA-informed agricultural decision support
 
 FieldShift V3 is the upgraded decision-support engine for NASA Space Apps 2026 “Field Shift: Adapting Farms with NASA Data”. V2 is retained for compatibility; the production path is now `fieldshift.v3`.
 
@@ -194,3 +194,29 @@ After deployment, check `/health`, `/api/status`, and `/api/demo` on the deploym
 
 For the full variable checklist, route diagnostics, current implementation gaps, and product roadmap, see [Vercel deployment](docs/VERCEL_DEPLOYMENT.md) and the [readiness audit](docs/AUDIT_AND_ROADMAP.md). `/api/status` reports environment-variable presence only; it does not prove NASA or Earth Engine connectivity. Analysis records are currently held in process memory and need a durable shared store before production run-history use.
 
+
+
+## KrishiNexus regional evidence and learning features (3.3.0)
+
+- The dashboard links to `/static/history.html`, a Regional Evidence Explorer for NASA POWER point-history summaries.
+- The Bengali student Learning Lab is served at `/school-game/` and calls the same `POST /api/analysis/run` product API as the farmer-facing app. Scores and quiz answers are derived from the returned analysis rather than fixed demo scores.
+- `GET /api/regions`, `GET /api/history/{region_id}`, `GET /api/data-status/{region_id}` and `GET /api/satellite-history/{region_id}?product=...` expose region, archive and source status.
+- `POST /api/refresh-jobs` enqueues a bounded, deduplicated NASA POWER YTD refresh. A separate supervised worker runs `python -m fieldshift.v3.refresh_worker`; long ingestion work is not run inside a serverless HTTP request.
+- `src/fieldshift/v3/satellite_archive.py` supports explicit CSV import with product-specific QA, provenance, checksums and a representative-point limitation. An AppEEARS or Earth Engine credential by itself is not an archived time series.
+
+### Operational requirements
+
+For durable production refresh jobs, configure `FIELD_SHIFT_JOBS_DSN` (PostgreSQL) and `FIELD_SHIFT_ARCHIVE_S3_BUCKET` (shared object storage), plus the applicable cloud credentials. The Vercel web function must not be treated as a persistent worker. Without those dependencies the refresh endpoint deliberately reports that refresh is unavailable; cached charts and analysis still work where data is bundled or reachable.
+
+Include `data/history/**` with the Vercel function so curated regional history is available at runtime. Satellite archives are separate under `data/satellite/curated/{region}/{product}.json` and are returned as `not_archived` unless a checksum-validated QA-curated dataset exists.
+
+### Scientific interpretation and limits
+
+- The regional points are nine representative NASA POWER grid samples, not zone means, farm measurements or field boundaries.
+- The twelve planning groups are provisional product groupings, not official BARC/BAMIS AEZ polygons. Use a versioned authoritative AEZ GIS crosswalk before parcel-level zone claims.
+- Monthly archive aggregates are chart-only. They are never converted into daily values for the crop simulation. Missing years/dates are gaps, not zero rainfall.
+- SMAP, MODIS MOD16, HLS and GPM availability is reported separately. No archived product is assumed from connector configuration alone.
+- A crop rotation score is a modelled decision-support estimate. It is not observed yield, a forecast or a locally validated agronomic prescription. The current crop/soil pack remains a Mymensingh pilot pending Bangladesh field calibration.
+- NASA does not endorse this project.
+
+See `docs/v3/KRISHINEXUS_IMPLEMENTATION_2026-10-26.md`, `KNOWN_UNKNOWN.md`, `VALIDATION_KRISHINEXUS.md` and `KRISHINEXUS_RELEASE_NOTES.md` for the scope, open validation work and release evidence.
