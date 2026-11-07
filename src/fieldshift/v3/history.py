@@ -225,7 +225,7 @@ def history_summary(region_id: str, start_year: int = 2016, end_year: int = 2025
                            "days": len(subset), "expected_days": calendar.monthrange(year, month)[1],
                             "is_partial": False})
     return {"region": region, "start_year": start_year, "end_year": end_year,
-            "status": "complete" if not missing else "partial" if annual else "not_downloaded",
+            "status": "summary_only" if aggregate_only and not missing else "partial" if missing and annual else "not_downloaded",
             "coverage_fraction": len(annual) / (end_year - start_year + 1), "missing_years": missing,
             "monthly": monthly, "annual": annual, "provenance": evidence,
             "archive_representation": "monthly_aggregate" if aggregate_only else "daily",
