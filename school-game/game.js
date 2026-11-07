@@ -2,8 +2,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const state = { data: null, missions: [], index: 0, score: 0, locked: false };
-  const fmt = (v,d=0) => Number.isFinite(Number(v)) ? new Intl.NumberFormat('bn-BD',{maximumFractionDigits:d}).format(Number(v)) : 'উপলভ্য নয়';
-  const pct = v => Number.isFinite(Number(v)) ? fmt(Number(v)*100)+'%' : 'উল্লেখ নেই';
+  const fmt = (v,d=0) => v!==null && v!==undefined && v!=='' && Number.isFinite(Number(v)) ? new Intl.NumberFormat('bn-BD',{maximumFractionDigits:d}).format(Number(v)) : 'উপলভ্য নয়';
+  const pct = v => v!==null && v!==undefined && v!=='' && Number.isFinite(Number(v)) ? fmt(Number(v)*100)+'%' : 'উল্লেখ নেই';
   const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const show = (id,on=true) => $(id).classList.toggle('hidden',!on);
   const status = s => ({available:'উপলভ্য',partial:'আংশিক',stale:'পুরোনো cache',unavailable:'উপলভ্য নয়',not_configured:'সংযুক্ত নয়',pending:'অপেক্ষমাণ',retrying:'আবার চেষ্টা চলছে',error:'ত্রুটি'}[s]||s||'অজানা');
