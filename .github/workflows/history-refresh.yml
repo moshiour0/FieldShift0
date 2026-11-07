@@ -1,0 +1,35 @@
+name: Publish quality-gated NASA POWER archive
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 3 * * 2"
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  ingest:
+    # No job is claimed as running until an OIDC role and durable S3 bucket exist.
+    if: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET != '' && vars.AWS_ROLE_ARN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[production]'
+      - name: Assume uploader role through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      - name: Fetch and publish recent QA-passed YTD data
+        env:
+          FIELD_SHIFT_ARCHIVE_S3_BUCKET: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET }}
+        run: python scripts/prefetch_ytd.py --refresh
+      - name: Archive last completed year
+        env:
+          FIELD_SHIFT_ARCHIVE_S3_BUCKET: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET }}
+        run: |
+          archive_year=$(( $(date -u +%Y) - 1 ))
+          python scripts/prefetch_history.py --start-year "$archive_year" --end-year "$archive_year"
