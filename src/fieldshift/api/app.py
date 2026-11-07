@@ -39,6 +39,11 @@ static_dir = APP_ROOT / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Bengali learning lab: ship the static client with the same FastAPI function.
+school_game_dir = Path(__file__).resolve().parents[3] / "school-game"
+if school_game_dir.is_dir():
+    app.mount("/school-game", StaticFiles(directory=school_game_dir, html=True), name="school-game")
+
 
 def _jsonable(run) -> dict[str, Any]:
     return json.loads(json.dumps(asdict(run), default=str))
