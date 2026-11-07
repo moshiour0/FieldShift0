@@ -20,6 +20,7 @@ from fieldshift.api.product import (
 from fieldshift.v3.appeears import credentials_configured as appeears_credentials_configured
 from fieldshift.v3.gee import gee_credentials_configured
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
+from fieldshift.v3.refresh_jobs import create_refresh, get_refresh
 from fieldshift.v3.history import REGIONS, history_summary, read_year
 from fieldshift.v3.history_extended import history_date_range, read_ytd
 from fieldshift.v3.region_catalog import zone_catalog
@@ -27,7 +28,7 @@ from fieldshift.v3.satellite_archive import SOURCES as SATELLITE_SOURCES, satell
 from datetime import date
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover
@@ -338,6 +339,40 @@ def satellite_history_api(region_id: str, product: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+
+
+@app.post("/api/refresh-jobs", status_code=202)
+def create_refresh_api(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    # A trusted proxy and distributed edge limit are required for public scale.
+    caller = request.client.host if request.client else "anonymous"
+    try:
+        job, created = create_refresh(
+            payload.get("region_id", ""),
+            payload.get("product", "power"),
+            payload.get("data_through", ""),
+            caller,
+        )
+        return {**job, "created": created,
+                "notice": "A separate supervised worker is required. Cached history remains available."}
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/refresh-jobs/{job_id}")
+def get_refresh_api(job_id: str) -> dict[str, Any]:
+    try:
+        result = get_refresh(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="Refresh job not found")
+    return result
 
 
 @app.get("/", response_class=HTMLResponse)
