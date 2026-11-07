@@ -20,6 +20,11 @@ from fieldshift.api.product import (
 from fieldshift.v3.appeears import credentials_configured as appeears_credentials_configured
 from fieldshift.v3.gee import gee_credentials_configured
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
+from fieldshift.v3.history import REGIONS, history_summary, read_year
+from fieldshift.v3.history_extended import history_date_range, read_ytd
+from fieldshift.v3.region_catalog import zone_catalog
+from fieldshift.v3.satellite_archive import SOURCES as SATELLITE_SOURCES, satellite_history
+from datetime import date
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -31,7 +36,7 @@ except ImportError as exc:  # pragma: no cover
 APP_ROOT = Path(__file__).resolve().parent
 app = FastAPI(
     title="FieldShift V3 Product API",
-    version="3.1.3",
+    version="3.3.0",
     description="Farmer-facing evidence-aware crop rotation decision support",
 )
 
@@ -51,7 +56,7 @@ def _jsonable(run) -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "engine": "3.0.0", "product": "3.1.3"}
+    return {"status": "ok", "engine": "3.0.0", "product": "3.3.0"}
 
 
 @app.get("/api/status")
@@ -239,6 +244,89 @@ def analysis_report_from_client(run_id: str, payload: dict[str, Any]) -> dict[st
         return report_from_response(data)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+
+
+@app.get("/api/regions")
+def regions() -> dict[str, Any]:
+    return {**zone_catalog(), "reference_points": REGIONS,
+            "notice": "Planning zones are provisional groupings, not official AEZ polygons. NASA POWER values are gridded point samples, not zone averages."}
+
+
+@app.get("/api/history/{region_id}")
+def regional_history(region_id: str, start_year: int = 2016, end_year: int = 2025,
+                     start: str | None = None, end: str | None = None,
+                     product: str = "power") -> dict[str, Any]:
+    try:
+        if product != "power":
+            raise ValueError("History source must be power; use /api/satellite-history for other products")
+        if start is not None or end is not None:
+            if not start or not end:
+                raise ValueError("Both start and end dates are required")
+            return history_date_range(region_id, start, end)
+        return history_summary(region_id, start_year, end_year)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/data-status/{region_id}")
+def source_data_status(region_id: str) -> dict[str, Any]:
+    try:
+        from fieldshift.v3.history import region_by_id
+        region = region_by_id(region_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Unknown region") from exc
+    through = None
+    archive_kind = "not_archived"
+    archive_error = None
+    try:
+        _, meta = read_ytd(region_id, date.today().year)
+        through = meta.get("data_through")
+        archive_kind = "ytd_partial"
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        archive_error = type(exc).__name__
+        for year in range(date.today().year - 1, max(2015, date.today().year - 11), -1):
+            try:
+                _, meta = read_year(region_id, year)
+                through = f"{year}-12-31"
+                archive_kind = "completed_year"
+                archive_error = None
+                break
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    products = {"power": {"state": "ready" if through else "not_archived",
+                          "data_through": through, "archive_kind": archive_kind,
+                          "sample_type": "NASA POWER gridded point",
+                          "field_measurement": False,
+                          "error_type": archive_error,
+                          "citation": "https://power.larc.nasa.gov/docs/services/api/temporal/daily/"}}
+    for product in SATELLITE_SOURCES:
+        try:
+            sat = satellite_history(region_id, product)
+            products[product] = {"state": sat.get("status", "available"),
+                                 "data_through": sat.get("data_through"),
+                                 "coverage_fraction": sat.get("coverage_fraction"),
+                                 "product_id": sat.get("product_id"),
+                                 "unit": sat.get("unit", SATELLITE_SOURCES[product]["unit"]),
+                                 "field_measurement": False}
+        except (OSError, ValueError, RuntimeError) as exc:
+            products[product] = {"state": "unavailable", "error_type": type(exc).__name__,
+                                 "field_measurement": False}
+    return {"region": region, "products": products,
+            "notice": "Source readiness is separate from whether a source was used in a particular analysis run."}
+
+
+@app.get("/api/satellite-history/{region_id}")
+def satellite_history_api(region_id: str, product: str) -> dict[str, Any]:
+    try:
+        return satellite_history(region_id, product)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/", response_class=HTMLResponse)
