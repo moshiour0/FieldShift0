@@ -47,6 +47,8 @@ def _monthly_archive_year(region_id: str, year: int) -> tuple[list[dict[str, Any
     """
     path = archive_dir() / "monthly-archive.json"
     if not path.exists():
+        path = archive_dir() / "monthly-archive" / f"{region_id}.json"
+    if not path.exists():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 1 or payload.get("source") != "NASA POWER Daily API":
