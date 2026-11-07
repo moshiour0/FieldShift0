@@ -204,7 +204,7 @@ def history_summary(region_id: str, start_year: int = 2016, end_year: int = 2025
             aggregate_only = True
             records, meta = compact
             evidence.append(meta)
-            total_days = sum(item["days" for item in records)
+            total_days = sum(item["days"] for item in records)
             annual.append({"year": year, "rain_mm": round(sum(item["rain_mm"] for item in records), 2),
                            "temperature_c": round(sum(item["temperature_c"] * item["days"] for item in records) / total_days, 2),
                            "days": total_days, "expected_days": 366 if calendar.isleap(year) else 365,
