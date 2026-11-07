@@ -297,7 +297,18 @@ def source_data_status(region_id: str) -> dict[str, Any]:
                 break
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-    products = {"power": {"state": "ready" if through else "not_archived",
+    power_state = "ready" if archive_kind in {"ytd_partial", "completed_year"} else "not_archived"
+    if through is None:
+        try:
+            compact = history_summary(region_id, 2016, 2025)
+            if compact.get("annual"):
+                through = f"{max(row['year'] for row in compact['annual'])}-12-31"
+                if compact.get("archive_representation") == "monthly_aggregate":
+                    archive_kind = "monthly_summary_chart_only"
+                    power_state = "summary_only"
+        except (OSError, ValueError, RuntimeError):
+            pass
+    products = {"power": {"state": power_state,
                           "data_through": through, "archive_kind": archive_kind,
                           "sample_type": "NASA POWER gridded point",
                           "field_measurement": False,
