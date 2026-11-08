@@ -68,9 +68,9 @@ button:focus-visible,a:focus-visible{outline:3px solid #8bae8b;outline-offset:3p
 @keyframes spin{to{transform:rotate(360deg)}}
 #results>.heading{margin:26px 0 16px}
 #results>.heading h2{font-size:25px}
-.quality{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 16px;padding:13px 16px;border:1px solid #dce6d9;border-radius:12px;background:#f1f6ed;color:var(--forest-2);font-size:12px}
-.quality b{font-weight:850}
-.quality span{color:#6b7b6d;font-size:11px;text-align:right}
+#quality{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 16px;padding:13px 16px;border:1px solid #dce6d9;border-radius:12px;background:#f1f6ed;color:var(--forest-2);font-size:12px}
+#quality b{font-weight:850}
+#quality span{color:#6b7b6d;font-size:11px;text-align:right}
 .result-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .result-grid .panel{margin:0;padding:21px}
 .result-grid h3{margin:0 0 14px;color:var(--forest);font-size:17px}
@@ -136,8 +136,8 @@ footer small{color:#879186;font-size:9px}
   .field.wide{grid-column:auto}
   .form-footer{align-items:stretch;flex-direction:column}
   .form-footer .primary{width:100%}
-  .quality{align-items:flex-start;flex-direction:column}
-  .quality span{text-align:left}
+  #quality{align-items:flex-start;flex-direction:column}
+  #quality span{text-align:left}
   .choices{grid-template-columns:1fr}
   #loading{flex-wrap:wrap}
   #loading p{width:100%;margin:0 0 0 34px}
