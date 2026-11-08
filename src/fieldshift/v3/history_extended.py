@@ -81,7 +81,7 @@ def history_date_range(region_id:str,start:str|date,end:str|date)->dict[str,Any]
     region=region_by_id(region_id); a,b=_day(start),_day(end)
     if a<date(1981,1,1) or b>date.today() or b<a or (b-a).days>30*366: raise ValueError("Date range must be ordered, not future, and <= 30 years")
     monthly,annual,evidence,missing=[],[],[],[]
-    grouped:dict[tuple[int,int],list[Any]]={}
+    grouped: dict[tuple[int, int], list[WeatherDay | dict[str, Any]]] = {}
     aggregate_years=set(); available=0
     for year in range(a.year,b.year+1):
         try:
@@ -105,16 +105,31 @@ def history_date_range(region_id:str,start:str|date,end:str|date)->dict[str,Any]
         if year==date.today().year:yend=min(yend,date.today())
         expected=(yend-ystart).days+1
         if year in aggregate_years:
-            n=sum(int(v["days"]) for v in yrows); rain=sum(float(v["rain_mm"]) for v in yrows)
-            temp=sum(float(v["temperature_c"])*int(v["days"]) for v in yrows)/max(1,n)
+            aggregate_rows = [v for v in yrows if isinstance(v, dict)]
+            if len(aggregate_rows) != len(yrows):
+                raise ValueError("Monthly archive contains mixed record types")
+            n = sum(int(v["days"]) for v in aggregate_rows)
+            rain = sum(float(v["rain_mm"]) for v in aggregate_rows)
+            temp = sum(float(v["temperature_c"]) * int(v["days"]) for v in aggregate_rows) / max(1, n)
         else:
-            n=len(yrows); rain=sum(v.rain_mm for v in yrows); temp=sum((v.tmax_c+v.tmin_c)/2 for v in yrows)/max(1,n)
+            daily_rows = [v for v in yrows if isinstance(v, WeatherDay)]
+            if len(daily_rows) != len(yrows):
+                raise ValueError("Daily archive contains non-daily records")
+            n = len(daily_rows)
+            rain = sum(v.rain_mm for v in daily_rows)
+            temp = sum((v.tmax_c + v.tmin_c) / 2 for v in daily_rows) / max(1, n)
         annual.append({"year":year,"rain_mm":round(rain,2),"temperature_c":round(temp,2),"days":n,"expected_days":expected,"is_partial":n!=expected or ystart!=date(year,1,1) or yend!=date(year,12,31),"archive_representation":"monthly_aggregate" if year in aggregate_years else "daily"})
     for (year,month),rows in sorted(grouped.items()):
         if year in aggregate_years:
-            v=rows[0]; monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(float(v["rain_mm"]),2),"temperature_c":round(float(v["temperature_c"]),2),"days":int(v["days"]),"expected_days":calendar.monthrange(year,month)[1],"is_partial":False,"archive_representation":"monthly_aggregate"})
+            if not rows or not isinstance(rows[0], dict):
+                raise ValueError("Monthly archive contains a non-aggregate record")
+            value = rows[0]
+            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(float(value["rain_mm"]),2),"temperature_c":round(float(value["temperature_c"]),2),"days":int(value["days"]),"expected_days":calendar.monthrange(year,month)[1],"is_partial":False,"archive_representation":"monthly_aggregate"})
         else:
-            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(sum(v.rain_mm for v in rows),2),"temperature_c":round(sum((v.tmax_c+v.tmin_c)/2 for v in rows)/len(rows),2),"days":len(rows),"expected_days":calendar.monthrange(year,month)[1],"is_partial":len(rows)!=calendar.monthrange(year,month)[1],"archive_representation":"daily"})
+            daily_rows = [v for v in rows if isinstance(v, WeatherDay)]
+            if len(daily_rows) != len(rows):
+                raise ValueError("Daily archive contains non-daily records")
+            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(sum(v.rain_mm for v in daily_rows),2),"temperature_c":round(sum((v.tmax_c+v.tmin_c)/2 for v in daily_rows)/len(daily_rows),2),"days":len(daily_rows),"expected_days":calendar.monthrange(year,month)[1],"is_partial":len(daily_rows)!=calendar.monthrange(year,month)[1],"archive_representation":"daily"})
     total=(b-a).days+1
     monthly_days = sum(int(row["days"]) for row in monthly if row.get("archive_representation") == "monthly_aggregate")
     has_monthly = bool(aggregate_years)
