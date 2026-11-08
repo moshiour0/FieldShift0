@@ -20,7 +20,7 @@ from fieldshift.api.product import (
 )
 from fieldshift.v3.appeears import credentials_configured as appeears_credentials_configured
 from fieldshift.v3.gee import gee_credentials_configured
-from fieldshift.v3.history import REGIONS, history_summary, read_year
+from fieldshift.v3.history import history_summary, read_year, REGIONS
 from fieldshift.v3.history_extended import history_date_range, read_ytd
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
 from fieldshift.v3.refresh_jobs import create_refresh, get_refresh
