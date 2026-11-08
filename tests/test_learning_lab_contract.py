@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+from fieldshift.api.app import app
+
 ROOT = Path(__file__).resolve().parents[1]
 LAB = ROOT / "school-game"
 
@@ -44,3 +48,41 @@ def test_learning_lab_styles_match_the_page_layout() -> None:
         assert f".{name}" in css, f"Missing CSS selector for .{name}"
     for name in required_ids:
         assert f"#{name}" in css, f"Missing CSS selector for #{name}"
+
+
+def test_learning_lab_analysis_submit_returns_live_v3_strategies(monkeypatch) -> None:
+    monkeypatch.setenv("FIELD_SHIFT_LIVE_NASA", "0")
+    client = TestClient(app)
+    response = client.post(
+        "/api/analysis/run",
+        json={
+            "field": {
+                "lat": 24.75,
+                "lon": 90.41,
+                "area_ha": 0.4,
+                "land_type": "medium highland",
+                "previous_crop": "Rice",
+                "soil": {},
+                "soil_data_source": "regional-defaults",
+                "farmer": {
+                    "water_available_mm_season": 900,
+                    "irrigation_reliability": 0.8,
+                    "budget_bdt_ha": 100000,
+                    "labour_available_person_days_ha": 120,
+                },
+            },
+            "priority_choices": ["water"],
+            "year": 2026,
+            "n_weight_samples": 80,
+            "n_uncertainty_samples": 24,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["run"]["mode"] == "live"
+    assert result["run"]["status"] in {"complete", "pending"}
+    assert result["field"]["location"]["lat"] == 24.75
+    assert result["field"]["area_ha"] == 0.4
+    assert result["strategies"]
+    assert result["evidence"]["items"]
