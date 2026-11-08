@@ -80,7 +80,10 @@ def _day(value:str|date)->date:
 def history_date_range(region_id:str,start:str|date,end:str|date)->dict[str,Any]:
     region=region_by_id(region_id); a,b=_day(start),_day(end)
     if a<date(1981,1,1) or b>date.today() or b<a or (b-a).days>30*366: raise ValueError("Date range must be ordered, not future, and <= 30 years")
-    monthly,annual,evidence,missing=[],[],[],[]
+    monthly: list[dict[str, Any]] = []
+    annual: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    missing: list[int] = []
     grouped: dict[tuple[int, int], list[WeatherDay | dict[str, Any]]] = {}
     aggregate_years=set(); available=0
     for year in range(a.year,b.year+1):
