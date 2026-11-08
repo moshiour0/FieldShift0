@@ -28,7 +28,7 @@ def test_mymensingh_compact_power_history_is_chart_only() -> None:
 
 def test_date_range_never_turns_monthly_aggregate_into_daily_records() -> None:
     result = history_date_range("mymensingh", "2016-01-01", "2025-12-31")
-    assert result["status"] == "complete"
+    assert result["status"] == "summary_only"
     assert result["sample_type"] == "single_gridded_point"
     assert result["archive_representation"] == "monthly_aggregate"
     assert result["monthly"]
