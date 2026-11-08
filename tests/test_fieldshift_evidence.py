@@ -19,7 +19,7 @@ def test_zone_catalog_is_explicitly_provisional() -> None:
 
 def test_mymensingh_compact_power_history_is_chart_only() -> None:
     result = history_summary("mymensingh", 2016, 2025)
-    assert result["status"] == "complete"
+    assert result["status"] == "summary_only"
     assert result["archive_representation"] == "monthly_aggregate"
     assert len(result["annual"]) == 10
     assert result["annual"][0]["year"] == 2016
@@ -29,7 +29,7 @@ def test_mymensingh_compact_power_history_is_chart_only() -> None:
 def test_date_range_never_turns_monthly_aggregate_into_daily_records() -> None:
     result = history_date_range("mymensingh", "2016-01-01", "2025-12-31")
     assert result["status"] == "summary_only"
-    assert result["sample_type"] == "single_gridded_point"
+    assert result["sample_type"] == "monthly_aggregate"
     assert result["archive_representation"] == "monthly_aggregate"
     assert result["monthly"]
     assert all(row["archive_representation"] == "monthly_aggregate" for row in result["monthly"])
