@@ -72,6 +72,13 @@ def _record(row: Any) -> dict | None:
     return {key: value for key, value in data.items() if key not in {"job_key", "owner_hash"}}
 
 
+def _required_record(row: Any) -> dict:
+    record = _record(row)
+    if record is None:
+        raise RuntimeError("Refresh job row could not be read after database operation")
+    return record
+
+
 def create_refresh(region_id: str, product: str, through: str, client_id: str) -> tuple[dict, bool]:
     region_by_id(region_id)
     if product != "power":
@@ -92,7 +99,7 @@ def create_refresh(region_id: str, product: str, through: str, client_id: str) -
     with _conn() as db:
         existing = _sql(db, "SELECT * FROM refresh_jobs WHERE job_key=?", (key,)).fetchone()
         if existing:
-            return _record(existing), False
+            return _required_record(existing), False
         count_row = _sql(db, "SELECT COUNT(*) AS n FROM refresh_jobs WHERE owner_hash=? AND created_at>?",
                          (owner, cutoff)).fetchone()
         count = count_row["n"] if _mode() == "postgres" else count_row[0]
@@ -108,7 +115,9 @@ def create_refresh(region_id: str, product: str, through: str, client_id: str) -
           VALUES (?,?,?,?,?,?,'queued',?,?,?) ON CONFLICT(job_key) DO NOTHING""",
              (job_id, key, region_id, product, through, owner, now, now, now))
         row = _sql(db, "SELECT * FROM refresh_jobs WHERE job_key=?", (key,)).fetchone()
-        return _record(row), row["id"] == job_id
+        if row is None:
+            raise RuntimeError("Refresh job row could not be read after insert")
+        return _required_record(row), row["id"] == job_id
 
 
 def get_refresh(job_id: str) -> dict | None:
