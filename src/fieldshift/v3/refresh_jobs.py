@@ -11,8 +11,9 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .history import region_by_id
 
