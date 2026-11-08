@@ -9,9 +9,9 @@ import hashlib
 import os
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
