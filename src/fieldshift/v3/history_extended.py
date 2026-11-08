@@ -125,7 +125,10 @@ def history_date_range(region_id:str,start:str|date,end:str|date)->dict[str,Any]
             if not aggregate_rows or len(aggregate_rows) != len(rows):
                 raise ValueError("Monthly archive contains a non-aggregate record")
             value = aggregate_rows[0]
-            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(float(value["rain_mm"]),2),"temperature_c":round(float(value["temperature_c"]),2),"days":int(value["days"]),"expected_days":calendar.monthrange(year,month)[1],"is_partial":False,"archive_representation":"monthly_aggregate"})
+            days_value = value.get("days")
+            if not isinstance(days_value, int) or isinstance(days_value, bool):
+                raise ValueError("Monthly archive day count must be an integer")
+            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(float(value["rain_mm"]),2),"temperature_c":round(float(value["temperature_c"]),2),"days":days_value,"expected_days":calendar.monthrange(year,month)[1],"is_partial":False,"archive_representation":"monthly_aggregate"})
         else:
             daily_rows = [v for v in rows if isinstance(v, WeatherDay)]
             if len(daily_rows) != len(rows):
