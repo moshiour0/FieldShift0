@@ -121,9 +121,10 @@ def history_date_range(region_id:str,start:str|date,end:str|date)->dict[str,Any]
         annual.append({"year":year,"rain_mm":round(rain,2),"temperature_c":round(temp,2),"days":n,"expected_days":expected,"is_partial":n!=expected or ystart!=date(year,1,1) or yend!=date(year,12,31),"archive_representation":"monthly_aggregate" if year in aggregate_years else "daily"})
     for (year,month),rows in sorted(grouped.items()):
         if year in aggregate_years:
-            if not rows or not isinstance(rows[0], dict):
+            aggregate_rows = [value for value in rows if isinstance(value, dict)]
+            if not aggregate_rows or len(aggregate_rows) != len(rows):
                 raise ValueError("Monthly archive contains a non-aggregate record")
-            value = rows[0]
+            value = aggregate_rows[0]
             monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(float(value["rain_mm"]),2),"temperature_c":round(float(value["temperature_c"]),2),"days":int(value["days"]),"expected_days":calendar.monthrange(year,month)[1],"is_partial":False,"archive_representation":"monthly_aggregate"})
         else:
             daily_rows = [v for v in rows if isinstance(v, WeatherDay)]
