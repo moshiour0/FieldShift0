@@ -25,7 +25,7 @@ from fieldshift.v3.history_extended import history_date_range, read_ytd
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
 from fieldshift.v3.refresh_jobs import create_refresh, get_refresh
 from fieldshift.v3.region_catalog import zone_catalog
-from fieldshift.v3.satellite_archive import SOURCES as SATELLITE_SOURCES, satellite_history
+from fieldshift.v3.satellite_archive import satellite_history, SOURCES as SATELLITE_SOURCES
 
 try:
     from fastapi import FastAPI, HTTPException, Request
