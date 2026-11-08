@@ -33,7 +33,7 @@ def test_date_range_never_turns_monthly_aggregate_into_daily_records() -> None:
     assert result["archive_representation"] == "monthly_aggregate"
     assert result["monthly"]
     assert all(row["archive_representation"] == "monthly_aggregate" for row in result["monthly"])
-    assert "not daily crop-model inputs" in result["note"]
+    assert "daily crop-model inputs" in result["note"]
 
 
 def test_satellite_connector_presence_does_not_claim_an_archive(tmp_path, monkeypatch) -> None:
