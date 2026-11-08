@@ -3,23 +3,25 @@
 const $=id=>document.getElementById(id), regions={mymensingh:[24.75,90.41],dhaka:[23.81,90.41],rajshahi:[24.37,88.60],rangpur:[25.75,89.25],khulna:[22.85,89.54],barishal:[22.70,90.35],sylhet:[24.89,91.87],chattogram:[22.36,91.78],rangamati:[22.65,92.18]};
 let result=null,questions=[],qi=0,score=0;
 const num=id=>Number($(id).value),esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const show=(id,on=true)=>$(id).classList.toggle("hidden",!on),fmt=(v,d=0)=>Number.isFinite(Number(v))?Number(v).toLocaleString("en-US",{maximumFractionDigits:d}):"—";
+const present=v=>v!==null&&v!==undefined&&v!==""&&Number.isFinite(Number(v));
+const show=(id,on=true)=>$(id).classList.toggle("hidden",!on),fmt=(v,d=0)=>present(v)?Number(v).toLocaleString("en-US",{maximumFractionDigits:d}):"উল্লেখ নেই",pct=v=>present(v)?fmt(Number(v)*100,1)+"%":"উল্লেখ নেই";
 const labels={available:"পাওয়া গেছে",partial:"আংশিক",stale:"পুরোনো cache",pending:"অপেক্ষমাণ",retrying:"আবার চেষ্টা হচ্ছে",unavailable:"পাওয়া যায়নি",not_archived:"archive নেই",not_downloaded:"ডাউনলোড হয়নি"};
 $("region").addEventListener("change",()=>{const k=$("region").value,custom=k==="custom";show("lat-field",custom);show("lon-field",custom);if(!custom){$("lat").value=regions[k][0];$("lon").value=regions[k][1];}});
 function payload(){
 const k=$("region").value,lat=k==="custom"?num("lat"):regions[k][0],lon=k==="custom"?num("lon"):regions[k][1],area=num("area"),water=num("water-available");
 if(!Number.isFinite(lat)||lat< -90||lat>90||!Number.isFinite(lon)||lon< -180||lon>180)throw Error("Latitude ও longitude সঠিকভাবে দাও।");
-if(!(area>0))throw Error("ক্ষেতের আয়তন শূন্যের বেশি হতে হবে।");
-if(!(water>=0))throw Error("মৌসুমে পানির পরিমাণ সঠিকভাবে দাও।");
+if(!Number.isFinite(area)||area<=0||area>10000)throw Error("ক্ষেতের আয়তন ০-এর বেশি ও ১০,০০০ হেক্টরের মধ্যে হতে হবে।");
+if(!Number.isFinite(water)||water<0||water>5000)throw Error("মৌসুমে পানির পরিমাণ ০–৫,০০০ mm-এর মধ্যে দাও।");
 const soil={};for(const [key,id] of [["ph","soil-ph"],["soc_pct","soil-soc"],["sand_pct","soil-sand"],["silt_pct","soil-silt"],["clay_pct","soil-clay"]]){const v=$(id).value.trim();if(v!=="")soil[key]=Number(v);}
 if(["sand_pct","silt_pct","clay_pct"].some(x=>x in soil)){if(!["sand_pct","silt_pct","clay_pct"].every(x=>Number.isFinite(soil[x])))throw Error("Texture দিতে Sand, Silt ও Clay—তিনটিই পূরণ করো।");if(Math.abs(soil.sand_pct+soil.silt_pct+soil.clay_pct-100)>2)throw Error("Sand + Silt + Clay যোগফল 100% (±2%) হতে হবে।");}
 return {field:{lat,lon,area_ha:area,land_type:$("land-type").value,previous_crop:$("previous-crop").value,soil,soil_data_source:Object.keys(soil).length?"farmer-reported":"regional-defaults",farmer:{water_available_mm_season:water,irrigation_reliability:num("irrigation-reliability"),budget_bdt_ha:100000,labour_available_person_days_ha:120}},priority_choices:[$("priority").value],year:new Date().getFullYear(),n_weight_samples:80,n_uncertainty_samples:24};
 }
 function render(data){
 const items=data.evidence?.items||[],quality=data.data_quality||{},qtext={high:"Multi-source evidence পাওয়া গেছে",moderate:"Evidence coverage মিশ্র",limited:"Remote evidence সীমিত; ফল বেশি নির্ভর করছে model/default inputs-এর ওপর"};
-$("quality").innerHTML="<b>"+esc(qtext[quality.level]||"Evidence status")+"</b><span>"+esc(quality.label||quality.level||"Unknown")+" · coverage "+fmt(Number(quality.coverage_fraction||0)*100,1)+"%</span>";
+const coverage=present(quality.coverage_fraction)?fmt(Number(quality.coverage_fraction)*100,1)+"%":"উল্লেখ নেই";
+$("quality").innerHTML="<b>"+esc(qtext[quality.level]||"Evidence status")+"</b><span>"+esc(quality.label||quality.level||"Unknown")+" · coverage "+coverage+"</span>";
 $("evidence").innerHTML=items.length?items.map(x=>"<div class='source'><div><b>"+esc(x.name)+"</b><small>"+esc(x.source_type||"source")+" · "+esc(x.retrieval_mode||"status not specified")+"</small></div><span class='status "+esc(x.status)+"'>"+esc(labels[x.status]||x.status||"অজানা")+"</span><p>"+esc(x.quality_note||x.error||x.fallback||x.setup_hint||"Source status recorded in analysis provenance.")+"</p></div>").join(""):"<p>এই run-এ source-level evidence record পাওয়া যায়নি।</p>";
-$("strategies").innerHTML=data.strategies.slice(0,4).map((s,i)=>{const m=s.metrics||{},range=s.score_range||[];return "<article class='strategy'><span class='rank'>#"+(i+1)+"</span><div><b>"+esc(s.label||s.id)+"</b><small>Modelled score range: "+fmt(range[0],2)+"–"+fmt(range[1],2)+" · top-1 probability "+fmt((s.top1_probability||0)*100,1)+"%</small><p>"+(s.crop_ids||[]).map(esc).join(" → ")+"</p><div class='strategy-metrics'><span>Water "+fmt(m.water_mm)+" mm</span><span>Yield "+fmt(m.yield_kg_ha)+" kg/ha</span><span>Net return ৳"+fmt(m.net_return_bdt_ha)+"</span></div></div></article>";}).join("");
+$("strategies").innerHTML=data.strategies.slice(0,4).map((s,i)=>{const m=s.metrics||{},range=s.score_range||[];return "<article class='strategy'><span class='rank'>#"+(i+1)+"</span><div><b>"+esc(s.label||s.id)+"</b><small>Modelled score range: "+fmt(range[0],2)+"–"+fmt(range[1],2)+" · top-1 probability "+pct(s.top1_probability)+"</small><p>"+(s.crop_ids||[]).map(esc).join(" → ")+"</p><div class='strategy-metrics'><span>Water "+fmt(m.water_mm)+" mm</span><span>Yield "+fmt(m.yield_kg_ha)+" kg/ha</span><span>Net return ৳"+fmt(m.net_return_bdt_ha)+"</span></div></div></article>";}).join("");
 $("source-count").textContent=items.length+" source";
 $("result-summary").textContent=(data.field?.location?.label||"Selected field")+" · "+(data.field?.area_ha??"—")+" ha · "+(data.run?.mode||"analysis");
 }
