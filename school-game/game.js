@@ -31,12 +31,12 @@
   }
 
   function render(data){
-    const q=data.data_quality||{}, snap=data.field_snapshot||{}, cov=Number(q.remote_observation_coverage);
+    const q=data.data_quality||{}, snap=data.field_snapshot||{}, cov=q.remote_observation_coverage;
     const rows=[
       ['মডেলের পানি চাহিদা',snap.irrigation_mm,'mm / মৌসুম','Crop-rotation model estimate'],
       ['মডেল ফলন',snap.yield_kg_ha,'kg / হেক্টর','মাপা বাস্তব ফলন নয়'],
       ['মডেল নিট আয়',snap.net_return_bdt_ha,'BDT / হেক্টর','দাম ও খরচের অনুমানের ওপর নির্ভর'],
-      ['Satellite evidence coverage',Number.isFinite(cov)?pct(cov):'উল্লেখ নেই','','Remote observation coverage']
+      ['Satellite evidence coverage',cov!==null&&cov!==undefined&&cov!==''&&Number.isFinite(Number(cov))?pct(cov):'উল্লেখ নেই','','Remote observation coverage']
     ];
     $('metric-grid').innerHTML=rows.map(r=>'<article class="metric-card"><span>'+esc(r[0])+'</span><strong>'+(typeof r[1]==='number'?fmt(r[1],1):esc(r[1]||'উল্লেখ নেই'))+'</strong><small>'+esc(r[2])+'</small><p>'+esc(r[3])+'</p></article>').join('');
     const level=q.level||'limited', note=level==='high'?'একাধিক উৎসের evidence পাওয়া গেছে; তবুও এটি জমির sensor বা soil test নয়।':level==='moderate'?'কিছু evidence পাওয়া গেছে, কিছু উৎস অনুপস্থিত বা অসম্পূর্ণ।':'Remote evidence সীমিত। কিছু ফল modeled বা synthetic input-এর ওপর নির্ভর করতে পারে।';
