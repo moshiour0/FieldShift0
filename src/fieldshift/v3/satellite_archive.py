@@ -107,8 +107,10 @@ def import_satellite_csv(*, region_id: str, product: str, filepath: Path, produc
     monthly: dict[str, list] = defaultdict(list)
     for item in accepted:
         value = getattr(item, field, None)
+        if value is None:
+            continue
         valid_range = (value >= 0 if product in {"gpm", "mod16", "smap"} else -1 <= value <= 1)
-        if value is not None and math.isfinite(value) and valid_range:
+        if math.isfinite(value) and valid_range:
             monthly[item.d.strftime("%Y-%m")].append((item.d, value, item.modis_et_period_days))
     aggregates = []
     for month, values in sorted(monthly.items()):
