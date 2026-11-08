@@ -36,7 +36,11 @@ def test_learning_lab_styles_match_the_page_layout() -> None:
         for value in re.findall(r'class="([^"]+)"', page)
         for token in value.split()
     }
-    required_classes = {"shell", "hero", "panel", "heading", "grid", "field", "form-footer", "result-grid", "quality"}
+    required_classes = {"shell", "hero", "panel", "heading", "grid", "field", "form-footer", "result-grid"}
+    required_ids = {"quality"}
     assert required_classes <= page_classes
+    assert required_ids <= set(re.findall(r'id="([^"]+)"', page))
     for name in required_classes:
         assert f".{name}" in css, f"Missing CSS selector for .{name}"
+    for name in required_ids:
+        assert f"#{name}" in css, f"Missing CSS selector for #{name}"
