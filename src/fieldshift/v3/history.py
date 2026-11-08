@@ -193,7 +193,10 @@ def history_summary(region_id: str, start_year: int = 2016, end_year: int = 2025
     region = region_by_id(region_id)
     if not 1981 <= start_year <= end_year < date.today().year or end_year - start_year > 29:
         raise ValueError("Select 1-30 completed calendar years from 1981 onward")
-    monthly, annual, evidence, missing = [], [], [], []
+    monthly: list[dict[str, Any]] = []
+    annual: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    missing: list[int] = []
     aggregate_only = False
     for year in range(start_year, end_year + 1):
         try:
