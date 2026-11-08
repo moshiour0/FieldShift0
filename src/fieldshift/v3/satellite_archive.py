@@ -16,7 +16,7 @@ from pathlib import Path
 from statistics import mean
 
 from .history import region_by_id
-from .nasa import remote_csv, _cache_write
+from .nasa import _cache_write, remote_csv
 
 SOURCES = {
     "smap": {"source": "NASA SMAP", "field": "smap_surface_m3_m3", "unit": "m³/m³",
@@ -116,25 +116,25 @@ def import_satellite_csv(*, region_id: str, product: str, filepath: Path, produc
         aggregates.append({
             "month": month, "value": round(value, 5), "n_observations": len(values),
             "data_through": max(day for day, _, _ in values).isoformat(),
-            "native_period_days": sorted(set(days for _, _, days in values)),
+            "native_period_days": sorted({days for _, _, days in values}),
         })
     if not aggregates:
         raise ValueError("No QA-passed observations; refusing to publish")
     row_digest = hashlib.sha256(json.dumps(aggregates, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    output = dict(
-        schema_version=1, product=product, region_id=region_id, product_id=product_id,
-        collection_version=version, native_resolution=native_resolution, temporal_resolution=temporal_resolution,
-        unit=SOURCES[product]["unit"], aggregation=SOURCES[product]["aggregate"], citation=citation,
-        retrieved_at=datetime.now(UTC).isoformat(), data_through=aggregates[-1]["data_through"],
-        raw_sha256=raw_hash, sha256=row_digest, quality_status="qa_filtered", status="ready",
-        coverage_fraction=None, fallback_used=False, source_geometry="representative_point_not_zone_average",
-        accepted_observations=sum(len(items) for items in monthly.values()), input_observations=len(records),
-        qa_policy=SOURCES[product]["qa"],
-        smap_reprocessing_verified=smap_reprocessing_verified if product == "smap" else None,
-        smap_reprocessing_evidence=reprocessing_evidence if product == "smap" else None,
-        monthly=aggregates,
-        note="Imported user-provided CSV; provenance is not independent confirmation of NASA retrieval.",
-    )
+    output = {
+        "schema_version": 1, "product": product, "region_id": region_id, "product_id": product_id,
+        "collection_version": version, "native_resolution": native_resolution, "temporal_resolution": temporal_resolution,
+        "unit": SOURCES[product]["unit"], "aggregation": SOURCES[product]["aggregate"], "citation": citation,
+        "retrieved_at": datetime.now(UTC).isoformat(), "data_through": aggregates[-1]["data_through"],
+        "raw_sha256": raw_hash, "sha256": row_digest, "quality_status": "qa_filtered", "status": "ready",
+        "coverage_fraction": None, "fallback_used": False, "source_geometry": "representative_point_not_zone_average",
+        "accepted_observations": sum(len(items) for items in monthly.values()), "input_observations": len(records),
+        "qa_policy": SOURCES[product]["qa"],
+        "smap_reprocessing_verified": smap_reprocessing_verified if product == "smap" else None,
+        "smap_reprocessing_evidence": reprocessing_evidence if product == "smap" else None,
+        "monthly": aggregates,
+        "note": "Imported user-provided CSV; provenance is not independent confirmation of NASA retrieval.",
+    }
     raw_dir = _base() / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     raw_path = raw_dir / f"{raw_hash}.csv"
