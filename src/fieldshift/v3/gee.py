@@ -167,7 +167,17 @@ def _smap_shared_cache_read(
         if any(row.d < start or row.d > end for row in rows):
             return None
         meta = payload.get("meta")
-        if not isinstance(meta, dict) or meta.get("retry_after_seconds") is not None:
+        expected = (end - start).days + 1
+        if (
+            not isinstance(meta, dict)
+            or meta.get("status") != "available"
+            or float(meta.get("coverage_fraction") or 0.0) < 1.0
+            or meta.get("retry_after_seconds") is not None
+            or len(rows) != expected
+            or any(row.d != start + timedelta(days=index) for index, row in enumerate(rows))
+        ):
+            # A partial historic year is not a durable cache hit. It must be
+            # re-queried later rather than freezing missing days indefinitely.
             return None
         return rows, meta, digest
     except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -275,12 +285,28 @@ def _smap_daily_point_timeseries_window(
         if age <= ttl:
             try:
                 cached_rows = _decode_smap_rows(cached.get("rows"))
-                return _smap_result(
-                    cached_rows, expected, retrieval_mode="local_cache", retry_after_seconds=retry_after,
-                    archive_cache_status=str(cached_meta.get("archive_cache_status") or "not_configured"),
-                    archive_object_key=cached_meta.get("archive_object_key"),
-                    archive_sha256=cached_meta.get("archive_sha256"),
+                complete_cache = (
+                    cached_meta.get("status") == "available"
+                    and len(cached_rows) == expected
+                    and all(
+                        row.d == start + timedelta(days=index)
+                        for index, row in enumerate(cached_rows)
+                    )
                 )
+                if complete_cache:
+                    return _smap_result(
+                        cached_rows, expected, retrieval_mode="local_cache",
+                        archive_cache_status=str(cached_meta.get("archive_cache_status") or "not_configured"),
+                        archive_object_key=cached_meta.get("archive_object_key"),
+                        archive_sha256=cached_meta.get("archive_sha256"),
+                    )
+                # Partial local observations may be useful for display, but
+                # are not a cache hit and must not suppress a live refresh.
+                if not allow_live_query:
+                    return _smap_result(
+                        cached_rows, expected, retrieval_mode="local_partial",
+                        archive_cache_status="not_verified",
+                    )
             except (KeyError, TypeError, ValueError):
                 pass
 
@@ -366,7 +392,7 @@ def _smap_daily_point_timeseries_window(
     }
     archive_status = "not_configured"
     archive_digest = None
-    if result_state.status in {"available", "partial"} and retry_after is None and google_drive.configured():
+    if result_state.status == "available" and retry_after is None and google_drive.configured():
         try:
             archive_digest = _smap_shared_cache_write(object_key, cache_key, identity, tuple(smap_rows), meta)
             archive_status = "verified"
