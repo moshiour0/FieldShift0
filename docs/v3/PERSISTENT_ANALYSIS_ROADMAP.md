@@ -548,3 +548,52 @@ Migration history confirmed on project `bipyrlegaxmhwzwrmcmi`:
 5. Wire verified Google Drive cache/archive lookup into source retrieval; verify checksums and exact spatial/time/product/QA compatibility before reusing cached data.
 6. Complete delayed-data/revision tests with provider mocks and a true close-tab/reopen end-to-end test.
 7. Keep PR #1 Draft/Open/Unmerged and Production unchanged until explicit user release approval.
+
+
+---
+
+## 12. Durable queue + worker implementation update — 2026-11-09
+
+This section supersedes the earlier “Important boundary: what is and is not durable yet” and “Next implementation phases” statements above for the source-code/database state. It does **not** claim a production or live Preview worker smoke test.
+
+### Implemented in the Draft PR branch
+
+- Signed-in users submit an immutable request snapshot to `POST /api/analysis/queue`. The API validates the Supabase access token and calls `public.queue_analysis_request`; the browser no longer has to finish the analysis before the initial run record exists.
+- `queue_analysis_request` validates the date range, binds the run to `auth.uid()`, computes a request hash, and uses the unique `(user_id, client_request_id)` key for idempotency. Concurrent replays with the same payload return the existing run; a different payload using the same key is rejected.
+- The `analysis_runs` insert trigger creates the initial `build_result` job. The worker can claim both `build_result` and `reconcile_run` jobs through `public.claim_analysis_run_job`.
+- The only intended HTTP worker entry point is `POST /api/internal/worker/tick`. The obsolete `/api/internal/worker` route was removed. The tick route compares the incoming worker token against server-only Preview settings and passes the matched token into the worker module.
+- `src/fieldshift/api/analysis_worker.py` claims one job, loads the owner-scoped request snapshot, runs the existing FieldShift analysis engine, stores a versioned evidence snapshot, and either completes or reschedules the job.
+- Worker writes use a publishable API key plus the legacy anon JWT role context. The additional high-entropy token is checked against Supabase Vault, and RLS requires an active lease tied to the exact run. No service-role key is placed in Vercel or the browser.
+- Retry handling respects the slowest pending provider's Retry-After value (bounded to 15 minutes–48 hours), retries transient transport/provider failures, and treats authentication/validation failures as terminal.
+- A run with any retryable provider still pending is saved as `waiting_for_data` with a **preliminary** result snapshot and `is_final=false`, even when the synchronous engine response itself reported `final_with_gaps`. The worker never upgrades a pending-data snapshot to a final result. At retry-budget exhaustion, the saved run remains `waiting_for_data` with stage `retry_exhausted`; it is not falsely marked final.
+- The worker appends the lifecycle event while its lease is still active, then releases/reschedules the job. Source retry counters are maintained with column-scoped grants and UPDATE-then-INSERT logic; no table-wide anon UPDATE/INSERT privilege was added.
+- The frontend can reopen the run from My Runs and restore the latest saved result revision. Browser polling is only a view refresh; the queue lifecycle itself is stored in Postgres.
+
+### Live database migrations applied and verified
+
+- Added the corrected worker state/idempotency migration and the worker source retry-counter/update-column grants.
+- Replaced the source write path to avoid PostgreSQL's table-wide UPDATE requirement for `INSERT ... ON CONFLICT DO UPDATE`.
+- Reordered worker completion so the token/lease-gated event policy remains true until the audit event is written.
+- Live function privilege checks confirm `queue_analysis_request` is executable by `authenticated`, while `claim_analysis_run_job`, `worker_save_analysis`, and `worker_fail_analysis_job` are executable by `anon` only through the token/lease RLS surface.
+- Security Advisor: no findings. Health Advisor: no findings.
+- A transaction-scoped integration test ran as the low-privilege `anon` worker role with a temporary test-only token matcher. It successfully claimed an initial `build_result` lease, upserted a pending NASA SMAP source, wrote a preliminary result revision, appended one lifecycle event, and released the job to `retrying`. The returned database state was `waiting_for_data`, stage `waiting_for_datasets`, progress 75, `completed_at=NULL`, result kind `preliminary`, snapshot `is_final=false`. The transaction was rolled back.
+- A separate transaction-scoped authenticated queue test exercised first submit, identical idempotent replay, and conflicting-payload rejection. Its transaction was rolled back.
+- Post-test checks confirm zero retained synthetic users, runs, jobs, sources, results or events.
+
+### Verification status and deployment boundary
+
+- Current CI commit `5a0381374c914a52aba7c995c86b04a8aeb76dc3`: Python 3.11 and 3.12 both report 151 passed and one existing Starlette/httpx TestClient deprecation warning. Ruff, compileall, and mypy pass (34 source files).
+- PR #1 remains Draft/Open/Unmerged.
+- **The scheduled worker is intentionally paused.** Two cron job names had existed; both have been removed. A live `cron.job` check returns no active jobs. This prevents the old Preview build from repeatedly issuing failed requests while it lacks the newest worker API-key role context.
+- The new branch requires a fresh Vercel Preview build to include the sensitive `SUPABASE_ANON_KEY` Preview variable and the final `/api/internal/worker/tick` implementation. Vercel's deployment API returned HTTP 402 `api-deployments-free-per-day` (more than 100 API deployment requests in 24 hours, retry-after 86400 seconds). The available Vercel CLI fallback is not installed in this execution environment. No billing/plan setting was changed and no Production deployment was attempted.
+- Therefore, **the database worker logic and its low-privilege transaction test are verified, but an end-to-end Vercel Preview HTTP worker smoke test is still pending**. Do not claim the worker is live or autonomously processing user runs until a fresh Preview deployment returns an authenticated `idle` response and a real queued run successfully produces a new revision.
+- Once a new Preview build is READY and the worker endpoint has passed the authenticated HTTP smoke test, re-register exactly one five-minute Supabase schedule named `fieldshift-analysis-worker`. Do not enable both schedule names. Keep Production unchanged until explicit release approval.
+
+### Remaining work
+
+1. Wait until Vercel's API deployment quota allows one fresh Preview build for the current PR head; verify that the Preview contains the new `SUPABASE_ANON_KEY` and matches the current Git SHA.
+2. Trigger one manual worker tick using the Vault-stored token and Vercel protection-bypass value. First expect a safe `idle` response with no queued work; then run a real signed-in queue smoke test and verify claim → source/result/event write → retry/completion in Supabase.
+3. Only after that smoke test succeeds, register the single five-minute `fieldshift-analysis-worker` cron job and verify its first HTTP response, not merely the pg_cron dispatch submission.
+4. Test a real Magic Link account and a two-account owner-isolation flow in the newly deployed Preview. Configure a custom SMTP provider before enabling public sign-ups.
+5. Verify reuse of provider task IDs across worker retries and wire the verified Google Drive archive/cache resolver into source retrieval. A queued request alone does not prove archive reuse or provider task resume.
+6. Keep PR #1 Draft/Open/Unmerged and Production unchanged until explicit user release approval.
