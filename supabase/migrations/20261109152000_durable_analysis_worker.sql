@@ -25,7 +25,7 @@ returns boolean
 language sql
 security invoker
 set search_path = pg_catalog, public, private, extensions
-as $function$
+as $
     select p_candidate is not null
        and length(p_candidate) >= 48
        and exists (
@@ -34,7 +34,7 @@ as $function$
            where s.setting_id = 1
              and s.token_sha256 = extensions.digest(convert_to(p_candidate, 'UTF8'), 'sha256')
        );
-$function$;
+$;
 revoke all on function public.verify_fieldshift_worker_token(text) from public, anon, authenticated;
 grant execute on function public.verify_fieldshift_worker_token(text) to service_role;
 
@@ -43,7 +43,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = pg_catalog, private
-as $function$
+as $
 begin
     if auth.uid() is not null and auth.uid() <> new.user_id then
         raise exception 'Cannot enqueue another user analysis' using errcode = '42501';
@@ -59,7 +59,7 @@ begin
     on conflict (idempotency_key) do nothing;
     return new;
 end;
-$function$;
+$;
 
 drop trigger if exists enqueue_initial_analysis_job on public.analysis_runs;
 create trigger enqueue_initial_analysis_job
@@ -74,7 +74,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, extensions
-as $function$
+as $
 declare
     v_user_id uuid := auth.uid();
     v_request_hash char(64);
@@ -132,7 +132,7 @@ begin
 
     return jsonb_build_object('run_id', v_run_id, 'status', 'queued', 'already_queued', false);
 end;
-$function$;
+$;
 
 revoke all on function public.queue_analysis_request(uuid, jsonb) from public, anon;
 grant execute on function public.queue_analysis_request(uuid, jsonb) to authenticated;
@@ -145,7 +145,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, private
-as $function$
+as $
 declare
     v_job private.analysis_run_jobs%rowtype;
     v_run public.analysis_runs%rowtype;
@@ -222,7 +222,7 @@ begin
         'requested_end', v_run.requested_end
     );
 end;
-$function$;
+$;
 
 revoke all on function public.claim_analysis_job(text, integer) from public, anon, authenticated;
 grant execute on function public.claim_analysis_job(text, integer) to service_role;
@@ -236,7 +236,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, private, extensions
-as $function$
+as $
 declare
     v_job private.analysis_run_jobs%rowtype;
     v_run public.analysis_runs%rowtype;
@@ -476,7 +476,7 @@ begin
         'result_id', v_result_id
     );
 end;
-$function$;
+$;
 
 revoke all on function public.complete_analysis_job(uuid, text, jsonb) from public, anon, authenticated;
 grant execute on function public.complete_analysis_job(uuid, text, jsonb) to service_role;
@@ -491,7 +491,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, private
-as $function$
+as $
 declare
     v_job private.analysis_run_jobs%rowtype;
     v_run public.analysis_runs%rowtype;
@@ -557,7 +557,7 @@ begin
 
     return jsonb_build_object('job_id',v_job.id,'status',v_new_status,'retry_after_seconds',v_delay);
 end;
-$function$;
+$;
 
 revoke all on function public.retry_analysis_job(uuid, text, text, text) from public, anon, authenticated;
 grant execute on function public.retry_analysis_job(uuid, text, text, text) to service_role;
