@@ -57,17 +57,19 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(request.headers.get("X-fieldshift-worker"), "w" * 56)
 
     def test_worker_settings_reject_missing_anon_jwt(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "SUPABASE_URL": "https://fieldshift.example.supabase.co",
-                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_example",
-                "SUPABASE_ANON_KEY": "",
-                "FIELDSHIFT_WORKER_TOKEN": "w" * 56,
-            },
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "https://fieldshift.example.supabase.co",
+                    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_example",
+                    "SUPABASE_ANON_KEY": "",
+                    "FIELDSHIFT_WORKER_TOKEN": "w" * 56,
+                },
+            ),
+            self.assertRaises(analysis_worker.WorkerAPIError),
         ):
-            with self.assertRaises(analysis_worker.WorkerAPIError):
-                analysis_worker._settings()
+            analysis_worker._settings()
 
     def test_transient_errors_retry_but_validation_errors_do_not(self) -> None:
         self.assertTrue(analysis_worker._is_retryable_worker_error(TimeoutError("network")))
