@@ -54,8 +54,23 @@ def prefetch_ytd(region_id:str,through:date,*,refresh:bool=False,progress=None)-
     path=_ytd_path(region_id,through.year)
     if not refresh:
         try:
-            _,meta=read_ytd(region_id,through.year)
-            if date.fromisoformat(meta["data_through"])>=through:return {**meta,"retrieval_mode":"archive"}
+            archive_key=f"power-history/{region_id}/{through.year}-ytd.json"
+            if google_drive.configured():
+                remote=google_drive.get_object(archive_key)
+                if remote is not None:
+                    _,meta=read_ytd(region_id,through.year)
+                    if date.fromisoformat(meta["data_through"])>=through:
+                        return {**meta,"retrieval_mode":"google_drive"}
+            if path.exists():
+                _,meta=read_ytd(region_id,through.year)
+                if date.fromisoformat(meta["data_through"])>=through:
+                    if google_drive.configured():
+                        google_drive.put_object(archive_key,path.read_bytes())
+                        _,remote_meta=read_ytd(region_id,through.year)
+                        if remote_meta["sha256"]!=meta["sha256"]:
+                            raise RuntimeError("Migrated Google Drive YTD archive checksum verification failed")
+                        return {**remote_meta,"retrieval_mode":"local_archive_published"}
+                    return {**meta,"retrieval_mode":"local_archive"}
         except (OSError,ValueError,KeyError,TypeError): pass
     region=region_by_id(region_id); start=date(through.year,1,1)
     if progress: progress("fetching")
