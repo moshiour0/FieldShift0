@@ -597,3 +597,20 @@ This section supersedes the earlier “Important boundary: what is and is not du
 4. Test a real Magic Link account and a two-account owner-isolation flow in the newly deployed Preview. Configure a custom SMTP provider before enabling public sign-ups.
 5. Verify reuse of provider task IDs across worker retries and wire the verified Google Drive archive/cache resolver into source retrieval. A queued request alone does not prove archive reuse or provider task resume.
 6. Keep PR #1 Draft/Open/Unmerged and Production unchanged until explicit user release approval.
+
+
+---
+
+## 13. Preview worker smoke test and schedule activation — 2026-11-09 10:04 UTC
+
+This update supersedes the paused-scheduler deployment boundary in Section 12 below, while preserving the distinction between an idle endpoint smoke test and processing a real user run.
+
+- Git-linked Vercel Preview deployment `dpl_5KT2DaXfPCeqeb2QDCL9hYSYEDj4` is READY at `https://field-shift0-nzct8ir1y.vercel.app`, commit `2f97e4245354d36abd5c7c90fe187c62a2951de2`. Its branch alias is `field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app`.
+- The Preview environment metadata includes `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, sensitive `SUPABASE_ANON_KEY`, `FIELDSHIFT_WORKER_TOKEN`, and `VERCEL_AUTOMATION_BYPASS_SECRET`. All are scoped to Preview branch `feat/krishinexus-real-data-school-lab`; no Production values were added.
+- Authenticated manual HTTP smoke tests through Supabase `pg_net` returned HTTP 200 with `{"ok":true,"processed":false,"message":"No queued analysis job is ready."}` for request IDs 8 and 11 against the branch alias and request ID 10 against the deployment-specific hostname. This verifies the current Preview's worker token check, Vercel protection bypass, Supabase publishable-key/anon-JWT context, PostgREST reachability, and empty-queue claim.
+- Exactly one Supabase scheduled job is active: `fieldshift-analysis-worker`, `*/5 * * * *`. Both historical scheduler names are not simultaneously active. Migration `activate_verified_preview_analysis_worker` registers the single canonical schedule after the authenticated Preview smoke test.
+- The 10:00 UTC `cron.job_run_details` entry reports `succeeded` for the pg_net dispatch statement. Its HTTP response row (request ID 9) separately recorded a transient `Error in the HTTP2 framing layer` with no HTTP status. That response is not treated as a worker success. Direct/manual retries through both Preview host forms returned HTTP 200. Verify the next scheduled HTTP response independently; pg_cron success only proves that the dispatch SQL ran.
+- At this point there are still no real user analysis runs in the database. The successful HTTP 200 responses were idle-queue checks, not completed NASA analyses. The transaction-scoped worker RLS test described in Section 12 verified the full claim → pending source → preliminary result → lifecycle event → retrying-job transition and rolled back all synthetic rows.
+- Latest CI for the schedule-activation migration commit `3f5b7ccc0e9342f7a922e3342a99b1b5718bf601`: Python 3.11 and 3.12 both report 151 passed and one existing Starlette/httpx deprecation warning; Ruff and mypy pass.
+- PR #1 is still Draft/Open/Unmerged. No Production deployment or Production environment change has been made.
+- The next end-to-end acceptance gate remains a real signed-in user's queued analysis: the worker must claim it, refresh provider evidence, persist a new result revision and event, and leave a retry scheduled while a provider remains pending. Until this is observed, do not claim a real NASA run has completed autonomously.
