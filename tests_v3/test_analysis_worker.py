@@ -181,9 +181,45 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(payload["_provider_task_ids"], {
             "nasa_smap": "smap-task-123", "nasa_hls": "hls-task-456",
         })
+        self.assertTrue(payload["_allow_live_smap"])
         self.assertNotIn("_provider_task_ids", request_payload)
+        self.assertNotIn("_allow_live_smap", request_payload)
         self.assertEqual(result["run_id"], "run-123")
         self.assertEqual(result["status"], "waiting_for_data")
+
+    def test_first_worker_attempt_only_checks_smap_cache(self) -> None:
+        engine_result = {
+            "run": {"status": "preliminary_ready", "is_final": False},
+            "evidence": {"items": []},
+        }
+        request_payload = {
+            "start_date": "2016-01-01",
+            "end_date": "2025-12-31",
+            "field": {"lat": 24.75, "lon": 90.41},
+        }
+        with (
+            patch(
+                "fieldshift.api.analysis_worker._settings",
+                return_value=("https://fieldshift.example.supabase.co", "publishable", "anon-jwt", "w" * 56),
+            ),
+            patch("fieldshift.api.analysis_worker._claim_job", return_value={
+                "id": "job-initial", "run_id": "run-initial", "attempts": 1,
+            }),
+            patch("fieldshift.api.analysis_worker._load_run", return_value={
+                "request_payload": request_payload,
+            }),
+            patch("fieldshift.api.analysis_worker._load_provider_task_ids", return_value={}),
+            patch("fieldshift.api.product.create_analysis", return_value=engine_result) as create,
+            patch("fieldshift.api.analysis_worker._save_result", return_value={
+                "run_id": "run-initial", "status": "preliminary_ready", "revision": 1, "job_status": "retrying",
+            }),
+        ):
+            result = analysis_worker.process_one("w" * 56)
+
+        payload = create.call_args.args[0]
+        self.assertFalse(payload["_allow_live_smap"])
+        self.assertNotIn("_allow_live_smap", request_payload)
+        self.assertEqual(result["status"], "preliminary_ready")
 
     def test_worker_api_uses_publishable_key_and_anon_jwt_role_context(self) -> None:
         response = MagicMock()
