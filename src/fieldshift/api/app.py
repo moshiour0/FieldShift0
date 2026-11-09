@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import secrets
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -284,6 +285,96 @@ def run(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _worker_retry_at(result: dict[str, Any], attempt: int) -> str | None:
+    evidence = result.get("evidence") or {}
+    items = evidence.get("items") or []
+    waits: list[int] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").lower()
+        retryable = status in {"pending", "retrying"} or (
+            status == "partial" and item.get("retry_after_seconds") is not None
+        )
+        if not retryable:
+            continue
+        try:
+            wait = int(item.get("retry_after_seconds") or 900)
+        except (TypeError, ValueError, OverflowError):
+            wait = 900
+        waits.append(max(900, min(172800, wait)))
+    if not waits:
+        return None
+    delay = min(waits)
+    return (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+
+
+@app.post("/api/internal/worker/tick")
+def fieldshift_worker_tick(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Claim and process one durable reconciliation job. Only Supabase Cron may call this."""
+    expected = (
+        os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip()
+        or os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
+    )
+    presented = request.headers.get("x-fieldshift-worker", "")
+    if not expected or not presented or not secrets.compare_digest(expected, presented):
+        raise HTTPException(status_code=401, detail="Worker authentication failed.")
+
+    job: dict[str, Any] | None = None
+    try:
+        job = supabase_auth.claim_worker_job(expected)
+        if not job:
+            return {"ok": True, "processed": False, "status": "idle"}
+
+        job_id = str(job.get("id") or "")
+        run_id = str(job.get("run_id") or "")
+        job_payload = job.get("payload") or {}
+        request_payload = job_payload.get("request_payload") if isinstance(job_payload, dict) else None
+        if job.get("job_type") != "reconcile_run":
+            raise ValueError("Unsupported durable analysis job type.")
+        if not job_id or not run_id or not isinstance(request_payload, dict):
+            raise ValueError("Durable analysis job payload is incomplete.")
+
+        # The request is replayed from its saved, user-owned snapshot. The browser
+        # is not involved in provider polling or the completion write.
+        result = create_analysis(request_payload)
+        retry_at = _worker_retry_at(result, int(job.get("attempts") or 1))
+        saved = supabase_auth.save_worker_analysis(
+            worker_secret=expected,
+            job_id=job_id,
+            run_id=run_id,
+            response_payload=result,
+            retry_at=retry_at,
+        )
+        return {
+            "ok": True,
+            "processed": True,
+            "job_id": job_id,
+            "run_id": run_id,
+            "status": saved.get("job_status"),
+            "run_status": result.get("run", {}).get("status"),
+            "revision": saved.get("revision"),
+            "next_retry_at": saved.get("next_retry_at"),
+        }
+    except Exception as exc:
+        if job:
+            try:
+                attempts = int(job.get("attempts") or 1)
+                delay = min(21600, 900 * (2 ** max(0, attempts - 1)))
+                retry_at = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+                supabase_auth.fail_worker_job(
+                    worker_secret=expected,
+                    job_id=str(job.get("id") or ""),
+                    error_code=type(exc).__name__,
+                    retry_at=retry_at,
+                )
+            except Exception:
+                # Preserve the original failure. The database lease will expire
+                # and the next scheduled tick can safely reclaim the job.
+                pass
+        raise HTTPException(status_code=503, detail="Background worker could not complete the queued analysis.") from exc
 
 
 @app.get("/api/demo")
