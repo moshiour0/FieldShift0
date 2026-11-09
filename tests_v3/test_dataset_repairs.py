@@ -645,6 +645,8 @@ def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, 
             raise AssertionError("A verified shared SMAP cache hit must not query Earth Engine")
 
         monkeypatch.setattr(gee, "_initialise_ee", no_earth_engine)
+        # A verified Drive cache hit does not require live Earth Engine credentials.
+        monkeypatch.setattr(gee, "gee_credentials_configured", lambda: False)
         second = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 1), tmp_path / "cold")
         assert second.status == "available"
         assert second.retrieval_mode == "google_drive_cache"
