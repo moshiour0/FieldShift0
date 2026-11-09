@@ -13,6 +13,7 @@ from typing import Any
 
 from .models import Provenance, WeatherDay
 from .nasa import NasaDataError, _cache_write, power_daily
+from . import google_drive
 
 ROOT = Path(__file__).resolve().parents[3]
 REGIONS: list[dict[str, Any]] = [
@@ -106,19 +107,20 @@ def validate_days(days: tuple[WeatherDay, ...], start: date, end: date) -> None:
 
 def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
     path = _path(region_id, year)
-    if path.exists():
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    elif os.getenv("FIELD_SHIFT_ARCHIVE_S3_BUCKET"):
+    payload = None
+    if google_drive.configured():
         try:
-            import boto3
-            obj = boto3.client("s3").get_object(Bucket=os.environ["FIELD_SHIFT_ARCHIVE_S3_BUCKET"],
-                    Key=f"power-history/{region_id}/{year}.json")
-            payload = json.loads(obj["Body"].read())
-        except Exception as exc:
-            if getattr(exc, "response", {}).get("Error", {}).get("Code", "") in {"404", "NoSuchKey"}:
-                raise FileNotFoundError(str(path)) from exc
-            raise RuntimeError("Durable history storage unavailable") from exc
-    else:
+            archived = google_drive.get_object(f"power-history/{region_id}/{year}.json")
+        except google_drive.GoogleDriveError as exc:
+            raise RuntimeError("Google Drive history archive unavailable") from exc
+        if archived is not None:
+            try:
+                payload = json.loads(archived.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("Google Drive history object is not valid JSON") from exc
+    if payload is None and path.exists():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload is None:
         raise FileNotFoundError(str(path))
     region = region_by_id(region_id)
     if (payload.get("region") != region or payload.get("year") != year
@@ -158,15 +160,17 @@ def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
     _, verified = read_year(region_id, year)
     if verified["sha256"] != payload["sha256"]:
         raise NasaDataError("Archive write verification failed")
-    if os.getenv("FIELD_SHIFT_ARCHIVE_S3_BUCKET"):
+    if google_drive.configured():
         try:
-            import boto3
-            boto3.client("s3").put_object(Bucket=os.environ["FIELD_SHIFT_ARCHIVE_S3_BUCKET"],
-                 Key=f"power-history/{region_id}/{year}.json", Body=path.read_bytes(),
-                 ContentType="application/json", ServerSideEncryption="AES256",
-                 Metadata={"sha256": verified["sha256"], "source": "nasa-power"})
+            google_drive.put_object(
+                f"power-history/{region_id}/{year}.json",
+                path.read_bytes(),
+            )
+            _, remote_verified = read_year(region_id, year)
+            if remote_verified["sha256"] != verified["sha256"]:
+                raise NasaDataError("Google Drive archive checksum verification failed")
         except Exception as exc:
-            raise RuntimeError("Completed-year archive could not be published to durable storage") from exc
+            raise RuntimeError("Completed-year Google Drive archive could not be published") from exc
     return verified
 
 
