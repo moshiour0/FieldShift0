@@ -25,7 +25,7 @@ def test_completed_local_archive_is_published_to_drive_without_provider_fetch(
         history, "_decode_year_payload", lambda region_id, year, raw: ((), metadata)
     )
 
-    def upload(key: str, content: bytes) -> dict:
+    def upload(key: str, content: bytes, *, sha256: str | None = None) -> dict:
         uploads.append((key, content))
         remote["content"] = content
         return {"id": "drive-object"}
@@ -83,7 +83,7 @@ def test_completed_local_archive_fails_when_drive_readback_is_missing(
     monkeypatch.setattr(history.google_drive, "get_object", lambda key: None)
     monkeypatch.setattr(history, "read_year", lambda region_id, year: ((), metadata))
 
-    def upload(key: str, content: bytes) -> dict:
+    def upload(key: str, content: bytes, *, sha256: str | None = None) -> dict:
         uploads.append((key, content))
         # Simulate an API write response without a readable persisted object.
         return {"id": "drive-object"}
