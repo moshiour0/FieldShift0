@@ -332,7 +332,7 @@ def process_one(worker_token: str | None = None) -> dict[str, Any]:
         # 15–20 minute HLS/MODIS tasks to settle without a long SMAP query.
         # From attempt five onward, acquire SMAP in the background and enrich
         # the same saved run.
-        request_payload["_allow_live_smap"] = int(job.get("attempts") or 1) >= 5
+        request_payload["_allow_live_smap"] = int(job.get("attempts") or 1) >= 2
 
         result = create_analysis(request_payload)
         saved = _save_result(job_id, result, configured_token)
