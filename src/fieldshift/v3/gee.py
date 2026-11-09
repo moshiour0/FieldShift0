@@ -232,6 +232,7 @@ def _smap_result(
 
 def _smap_daily_point_timeseries_window(
     lat: float, lon: float, start: date, end: date, cache_dir: str | Path,
+    *, allow_live_query: bool = True,
 ) -> SMAPPointResult:
     """Fetch point SMAP L4 daily means from the 3-hourly GEE collection.
 
@@ -282,6 +283,14 @@ def _smap_daily_point_timeseries_window(
                 )
             except (KeyError, TypeError, ValueError):
                 pass
+
+    if not allow_live_query:
+        # The first worker pass must not wait on a long SMAP acquisition.
+        # A verified shared/local cache is still eligible above; on a miss,
+        # return a durable pending state and let the next worker attempt fetch.
+        return _smap_result(
+            (), expected, retrieval_mode="cache_miss", retry_after_seconds=3600,
+        )
 
     ee = _initialise_ee()
     point = ee.Geometry.Point([lon, lat])
@@ -389,6 +398,7 @@ def _smap_daily_point_timeseries_window(
 
 def smap_daily_point_timeseries(
     lat: float, lon: float, start: date, end: date, cache_dir: str | Path,
+    *, allow_live_query: bool = True,
 ) -> SMAPPointResult:
     """Read a long SMAP window in bounded, independently cached <=366-day chunks.
 
@@ -412,7 +422,9 @@ def smap_daily_point_timeseries(
         cursor = chunk_end + timedelta(days=1)
 
     results = [
-        _smap_daily_point_timeseries_window(lat, lon, chunk_start, chunk_end, cache_dir)
+        _smap_daily_point_timeseries_window(
+            lat, lon, chunk_start, chunk_end, cache_dir, allow_live_query=allow_live_query,
+        )
         for chunk_start, chunk_end in chunks
     ]
     by_date = {row.d: row for result in results for row in result.rows}
