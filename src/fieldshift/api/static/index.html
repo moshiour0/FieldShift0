@@ -224,6 +224,8 @@ async function initAccount(){
     state.auth.config=await configResponse.json();
     const fragment=new URLSearchParams(window.location.hash.replace(/^#/,''));
     const accessToken=fragment.get('access_token');
+    const authError=fragment.get('error_description')||fragment.get('error_code');
+    if(authError)toast(decodeURIComponent(authError.replace(/\+/g,' ')));
     if(accessToken){
       storeAuthSession({
         access_token:accessToken,
