@@ -187,7 +187,7 @@ def _smap_shared_cache_write(
                 "source": row.source,
                 "provenance": asdict(row.provenance) if row.provenance else None,
             }
-            for row in rows
+            for row in smap_rows
         ],
         "meta": meta,
     }
@@ -259,9 +259,9 @@ def _smap_daily_point_timeseries_window(
         except google_drive.GoogleDriveError:
             shared = None
         if shared is not None:
-            rows, meta, digest = shared
+            shared_rows, meta, digest = shared
             return _smap_result(
-                rows, expected, retrieval_mode="google_drive_cache",
+                shared_rows, expected, retrieval_mode="google_drive_cache",
                 archive_cache_status="verified", archive_object_key=object_key, archive_sha256=digest,
             )
 
@@ -273,9 +273,9 @@ def _smap_daily_point_timeseries_window(
         ttl = max(60, int(os.getenv("FIELD_SHIFT_SMAP_GEE_CACHE_TTL_SECONDS", "604800" if retry_after is None else "600")))
         if age <= ttl:
             try:
-                rows = _decode_smap_rows(cached.get("rows"))
+                cached_rows = _decode_smap_rows(cached.get("rows"))
                 return _smap_result(
-                    rows, expected, retrieval_mode="local_cache", retry_after_seconds=retry_after,
+                    cached_rows, expected, retrieval_mode="local_cache", retry_after_seconds=retry_after,
                     archive_cache_status=str(cached_meta.get("archive_cache_status") or "not_configured"),
                     archive_object_key=cached_meta.get("archive_object_key"),
                     archive_sha256=cached_meta.get("archive_sha256"),
@@ -316,7 +316,7 @@ def _smap_daily_point_timeseries_window(
         citation="https://doi.org/10.5067/T5RUATAQREF8",
         confidence=0.88,
     )
-    rows: list[RemoteDay] = []
+    smap_rows: list[RemoteDay] = []
     for feature in result.get("features", []):
         properties = feature.get("properties", {}) if isinstance(feature, dict) else {}
         try:
@@ -331,7 +331,7 @@ def _smap_daily_point_timeseries_window(
             continue
         if not 0.0 <= surface <= 0.9 or not 0.0 <= rootzone <= 0.9:
             continue
-        rows.append(RemoteDay(
+        smap_rows.append(RemoteDay(
             d=observed_day,
             smap_surface_m3_m3=surface,
             smap_rootzone_m3_m3=rootzone,
@@ -339,15 +339,15 @@ def _smap_daily_point_timeseries_window(
             provenance=provenance,
         ))
 
-    rows.sort(key=lambda row: row.d)
-    present = {row.d for row in rows}
+    smap_rows.sort(key=lambda row: row.d)
+    present = {row.d for row in smap_rows}
     trailing_missing = end not in present or any(
         date.fromordinal(day.toordinal()) not in present
         for day in (end - timedelta(days=offset) for offset in range(min(6, expected)))
     )
     recent_window = end >= date.today() - timedelta(days=6)
     retry_after = 3600 if trailing_missing and recent_window else None
-    result_state = _smap_result(tuple(rows), expected, retrieval_mode="google_earth_engine",
+    result_state = _smap_result(tuple(smap_rows), expected, retrieval_mode="google_earth_engine",
                                 retry_after_seconds=retry_after)
     meta = {
         "status": result_state.status,
@@ -380,7 +380,7 @@ def _smap_daily_point_timeseries_window(
         "meta": meta,
     })
     return _smap_result(
-        tuple(rows), expected, retrieval_mode=result_state.retrieval_mode,
+        tuple(smap_rows), expected, retrieval_mode=result_state.retrieval_mode,
         retry_after_seconds=retry_after, archive_cache_status=archive_status,
         archive_object_key=object_key if archive_status == "verified" else None,
         archive_sha256=archive_digest,
