@@ -267,8 +267,9 @@ def _upload(
     parent_id: str,
     name: str,
     content: bytes,
+    mime_type: str,
 ) -> dict[str, Any]:
-    metadata: dict[str, Any] = {"name": name, "mimeType": "application/json"}
+    metadata: dict[str, Any] = {"name": name, "mimeType": mime_type}
     if file_id is None:
         metadata["parents"] = [parent_id]
     path = "files" if file_id is None else f"files/{urllib.parse.quote(file_id, safe='')}"
@@ -284,7 +285,7 @@ def _upload(
             body=json.dumps(metadata, separators=(",", ":")).encode("utf-8"),
             headers={
                 "Content-Type": "application/json; charset=UTF-8",
-                "X-Upload-Content-Type": "application/json",
+                "X-Upload-Content-Type": mime_type,
                 "X-Upload-Content-Length": str(len(content)),
             },
         )
@@ -296,7 +297,7 @@ def _upload(
             upload_url,
             body=content,
             headers={
-                "Content-Type": "application/json",
+                "Content-Type": mime_type,
                 "Content-Length": str(len(content)),
             },
         )
@@ -306,7 +307,7 @@ def _upload(
         body = (
             f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode("ascii")
             + metadata_bytes
-            + f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode("ascii")
+            + f"\r\n--{boundary}\r\nContent-Type: {mime_type}\r\n\r\n".encode("ascii")
             + content
             + f"\r\n--{boundary}--\r\n".encode("ascii")
         )
@@ -325,7 +326,13 @@ def _upload(
     return result
 
 
-def put_object(key: str, content: bytes, *, sha256: str | None = None) -> dict[str, Any]:
+def put_object(
+    key: str,
+    content: bytes,
+    *,
+    sha256: str | None = None,
+    mime_type: str = "application/json",
+) -> dict[str, Any]:
     parts = _parts(key)
     parent_id = _resolve_parent(parts[:-1], create=True)
     if parent_id is None:
@@ -339,6 +346,7 @@ def put_object(key: str, content: bytes, *, sha256: str | None = None) -> dict[s
         parent_id=parent_id,
         name=parts[-1],
         content=content,
+        mime_type=mime_type,
     )
 
 
