@@ -1068,10 +1068,19 @@ def appeears_point_timeseries(
     timeout: int = 20,
     max_wait_seconds: int | None = None,
     existing_task_ids: dict[str, str] | None = None,
+    source_keys: set[str] | None = None,
 ) -> AppEEARSResult:
-    """One shared token, independent SMAP/MODIS/HLS tasks, resumable across requests."""
+    """Run only the selected independent product tasks, resumable across requests."""
+    selected_definitions = tuple(
+        definition for definition in SOURCE_DEFINITIONS
+        if source_keys is None or definition["key"] in source_keys
+    )
+    if not selected_definitions:
+        return AppEEARSResult((), ())
     if not credentials_configured():
-        return AppEEARSResult((), tuple(_source_statuses((), "not_configured", "Earthdata credentials are not configured on the server.")))
+        selected_names = {definition["name"] for definition in selected_definitions}
+        statuses = _source_statuses((), "not_configured", "Earthdata credentials are not configured on the server.")
+        return AppEEARSResult((), tuple(item for item in statuses if item.get("name") in selected_names))
     if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180 or start > end:
         raise ValueError("Invalid coordinate or date range for AppEEARS")
     max_days = max(1, min(366, int(os.getenv("FIELD_SHIFT_APPEEARS_MAX_DAYS", "366"))))
@@ -1089,7 +1098,7 @@ def appeears_point_timeseries(
         token = _login_token(timeout=timeout)
         products = _metadata_request("product", token, timeout, Path(cache_dir))
     except Exception as exc:
-        return AppEEARSResult((), tuple(failure(d, exc) for d in SOURCE_DEFINITIONS))
+        return AppEEARSResult((), tuple(failure(d, exc) for d in selected_definitions))
     wait = max_wait_seconds if max_wait_seconds is not None else int(os.getenv("FIELD_SHIFT_APPEEARS_WAIT_SECONDS", "0"))
     task_index: dict[str, Any] = {}
 
@@ -1121,5 +1130,5 @@ def appeears_point_timeseries(
             return AppEEARSResult((), (failure(definition, exc),))
 
     # NASA tasks remain independent, but HTTP requests are paced sequentially.
-    results = [sample(definition) for definition in SOURCE_DEFINITIONS]
+    results = [sample(definition) for definition in selected_definitions]
     return AppEEARSResult(tuple(row for r in results for row in r.remote), tuple(item for r in results for item in r.datasets))
