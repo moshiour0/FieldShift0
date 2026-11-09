@@ -251,8 +251,6 @@ def _smap_daily_point_timeseries_window(
     interpolated. A recent trailing gap is returned as pending/partial so the
     durable worker can check again after provider ingestion catches up.
     """
-    if not gee_credentials_configured():
-        raise ValueError("Google Earth Engine credentials are not configured")
     if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
         raise ValueError("invalid latitude/longitude for NASA SMAP")
     if start > end or start < date(2015, 3, 31) or end > date.today():
@@ -318,6 +316,8 @@ def _smap_daily_point_timeseries_window(
             (), expected, retrieval_mode="cache_miss", retry_after_seconds=900,
         )
 
+    if not gee_credentials_configured():
+        raise ValueError("Google Earth Engine credentials are not configured")
     ee = _initialise_ee()
     point = ee.Geometry.Point([lon, lat])
     collection = (
