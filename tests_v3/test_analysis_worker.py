@@ -36,7 +36,7 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(sources[0]["last_error_code"], "PROVIDER_PENDING")
         self.assertNotIn("internal response body", str(sources[0]))
 
-    def test_pending_provider_downgrades_engine_final_to_waiting_for_data(self) -> None:
+    def test_optional_pending_smap_keeps_a_preliminary_result_available(self) -> None:
         engine_result = {
             "run": {
                 "status": "final_with_gaps",
@@ -46,10 +46,11 @@ class TestAnalysisWorker(unittest.TestCase):
             },
             "evidence": {
                 "items": [
-                    {"source_key": "nasa_power", "name": "NASA POWER", "status": "available"},
+                    {"source_key": "nasa_power_daily_weather", "name": "NASA POWER", "required": True, "status": "available"},
                     {
                         "source_key": "nasa_smap",
                         "name": "NASA SMAP",
+                        "required": False,
                         "status": "pending",
                         "retry_after_seconds": 3600,
                     },
@@ -63,13 +64,33 @@ class TestAnalysisWorker(unittest.TestCase):
             analysis_worker._save_result("job-1", engine_result, "w" * 56)
 
         payload = save.call_args.kwargs["payload"]
-        self.assertEqual(payload["p_run"]["status"], "waiting_for_data")
+        self.assertEqual(payload["p_run"]["status"], "preliminary_ready")
         self.assertEqual(payload["p_result"]["result_kind"], "preliminary")
         saved_run = payload["p_result"]["result_payload"]["run"]
-        self.assertEqual(saved_run["status"], "waiting_for_data")
+        self.assertEqual(saved_run["status"], "preliminary_ready")
         self.assertFalse(saved_run["is_final"])
-        self.assertIn("still pending", saved_run["status_message"])
+        self.assertIn("Optional evidence is still processing", saved_run["status_message"])
         self.assertEqual(engine_result["run"]["status"], "final_with_gaps")
+        self.assertEqual(payload["p_retry_at"] is not None, True)
+
+    def test_pending_required_power_keeps_run_waiting_for_data(self) -> None:
+        engine_result = {
+            "run": {"status": "preliminary_ready", "is_final": False},
+            "evidence": {"items": [
+                {"source_key": "nasa_power_daily_weather", "name": "NASA POWER", "required": True,
+                 "status": "pending", "retry_after_seconds": 900},
+                {"source_key": "nasa_smap", "name": "NASA SMAP", "required": False, "status": "available"},
+            ]},
+        }
+        with patch(
+            "fieldshift.api.analysis_worker._rest_json",
+            return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "retrying"},
+        ) as save:
+            analysis_worker._save_result("job-1", engine_result, "w" * 56)
+        payload = save.call_args.kwargs["payload"]
+        self.assertEqual(payload["p_run"]["status"], "waiting_for_data")
+        self.assertFalse(payload["p_result"]["result_payload"]["run"]["is_final"])
+        self.assertIn("Required evidence is still pending", payload["p_run"]["status_message"])
 
     def test_final_result_without_pending_providers_remains_final(self) -> None:
         engine_result = {
@@ -91,6 +112,19 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(payload["p_run"]["status"], "final_ready")
         self.assertEqual(payload["p_result"]["result_kind"], "final")
         self.assertTrue(payload["p_result"]["result_payload"]["run"]["is_final"])
+
+
+    def test_source_records_persist_shared_archive_provenance(self) -> None:
+        sources = analysis_worker._source_records([{
+            "name": "NASA SMAP",
+            "source_key": "nasa_smap",
+            "status": "available",
+            "archive_cache_status": "verified",
+            "archive_object_key": "satellite-point-cache/v1/smap/abc.json",
+            "archive_sha256": "a" * 64,
+        }])
+        self.assertEqual(sources[0]["provenance"]["archive_cache_status"], "verified")
+        self.assertEqual(sources[0]["provenance"]["archive_sha256"], "a" * 64)
 
     def test_saved_provider_task_ids_are_loaded_from_active_run_sources(self) -> None:
         expected = {
