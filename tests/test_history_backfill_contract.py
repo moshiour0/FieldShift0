@@ -16,14 +16,17 @@ def test_power_history_backfill_is_manual_gated_and_resumable() -> None:
 
     assert set(workflow["on"]) == {"workflow_dispatch"}
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
-    assert inputs["start_year"]["default"] == "2016"
+    # The first run must be a small, completed-year pilot, not the full backfill.
+    assert inputs["start_year"]["default"] == "2025"
     assert inputs["end_year"]["default"] == "2025"
 
     preflight = workflow["jobs"]["preflight"]["steps"]
     credentials = next(
         step for step in preflight
-        if step.get("name") == "Validate credentials, folder access and year window"
+        if step.get("name") == "Validate branch, credentials, folder access and year window"
     )
+    assert "feat/krishinexus-real-data-school-lab" in credentials["run"]
+    assert "Wrong branch" in credentials["run"]
     for name in (
         "GOOGLE_DRIVE_CLIENT_ID",
         "GOOGLE_DRIVE_CLIENT_SECRET",
