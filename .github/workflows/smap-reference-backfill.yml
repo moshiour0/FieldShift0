@@ -1,0 +1,115 @@
+name: Backfill nine-reference-point NASA SMAP archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: First completed year to archive
+        required: true
+        type: number
+        default: 2016
+      end_year:
+        description: Last completed year to archive
+        required: true
+        type: number
+        default: 2025
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldshift-smap-reference-backfill
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Verify Google Drive and Earth Engine prerequisites
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FieldShift with Earth Engine client
+        run: python -m pip install -e .[api]
+      - name: Validate branch, year window, credentials and Drive access
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          FIELD_SHIFT_GEE_PROJECT: ${{ secrets.FIELD_SHIFT_GEE_PROJECT }}
+          FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON }}
+          START_YEAR: ${{ inputs.start_year }}
+          END_YEAR: ${{ inputs.end_year }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "feat/krishinexus-real-data-school-lab" ]]; then
+            echo "::error title=Wrong branch::Select feat/krishinexus-real-data-school-lab. No NASA request was started."
+            exit 1
+          fi
+          if [[ -z "$GOOGLE_DRIVE_CLIENT_ID" || -z "$GOOGLE_DRIVE_CLIENT_SECRET" || -z "$GOOGLE_DRIVE_REFRESH_TOKEN" || -z "$GOOGLE_DRIVE_FOLDER_ID" ]]; then
+            echo "::error title=Google Drive archive not configured::Add the four GOOGLE_DRIVE_* Actions Secrets. No NASA request was started."
+            exit 1
+          fi
+          if [[ -z "$FIELD_SHIFT_GEE_PROJECT" || -z "$FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON" ]]; then
+            echo "::error title=Earth Engine not configured::Add FIELD_SHIFT_GEE_PROJECT and FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON as repository Actions Secrets. No NASA request was started."
+            exit 1
+          fi
+          current_year="$(date -u +%Y)"
+          if ! [[ "$START_YEAR" =~ ^[0-9]{4}$ && "$END_YEAR" =~ ^[0-9]{4}$ ]] ||
+             (( START_YEAR < 2016 || END_YEAR < START_YEAR || END_YEAR >= current_year || END_YEAR - START_YEAR > 29 )); then
+            echo "::error::Select completed years from 2016 onward, ascending, maximum 30 years."
+            exit 1
+          fi
+          {
+            echo "## SMAP representative-point archive"
+            echo "- Years: $START_YEAR–$END_YEAR"
+            echo "- Source: NASA SMAP SPL4SMGP.008 via Google Earth Engine"
+            echo "- Points: all nine configured representative coordinates, each processed by its own job"
+            echo "- Storage: private Google Drive, stable calendar-year objects"
+            echo "- This is point-reference data only, NOT a national gridded archive or regional mean."
+          } >> "$GITHUB_STEP_SUMMARY"
+          python scripts/google_drive_archive.py verify
+
+  ingest:
+    name: Archive SMAP point — ${{ matrix.region }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        region:
+          - mymensingh
+          - dhaka
+          - rajshahi
+          - rangpur
+          - khulna
+          - barishal
+          - sylhet
+          - chattogram
+          - rangamati
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FieldShift with Earth Engine client
+        run: python -m pip install -e .[api]
+      - name: Fetch, QA and publish each completed SMAP year
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          FIELD_SHIFT_GEE_PROJECT: ${{ secrets.FIELD_SHIFT_GEE_PROJECT }}
+          FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON }}
+          REGION: ${{ matrix.region }}
+          START_YEAR: ${{ inputs.start_year }}
+          END_YEAR: ${{ inputs.end_year }}
+        run: |
+          set -euo pipefail
+          python scripts/prefetch_smap_points.py --region "$REGION" --start-year "$START_YEAR" --end-year "$END_YEAR" --pause 2
