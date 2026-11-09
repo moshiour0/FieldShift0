@@ -232,7 +232,7 @@ function showWorkerPending(detail){
     ? 'Automatic checks reached their retry limit. This run remains saved as WAITING FOR DATA; reopen it later to request another check.'
     : names.length ? 'Background checks continue for: '+names.join(', ')+'. You may close this page.'
     : run.status_message||'Background processing continues. You may close this page.';
-  if(run.stage==='retry_exhausted'||['failed','cancelled','final_ready','final_with_gaps'].includes(run.status)){
+  if(run.stage==='retry_exhausted'||['failed','cancelled'].includes(run.status)||Boolean(run.completed_at)){
     qs('#pending-evidence').classList.add('hidden');
     qs('#refresh-evidence').classList.remove('hidden');qs('#stop-refresh').classList.remove('hidden');
   }else{
@@ -253,7 +253,7 @@ async function pollQueuedRun(runId,version,attempt){
       data.run.is_final=['final_ready','final_with_gaps'].includes(run.status);
       applyData(data);showWorkerPending(detail);
     }else{showQueuedRun(run);}
-    const terminal=run.stage==='retry_exhausted'||['failed','cancelled','final_ready','final_with_gaps'].includes(run.status)||Boolean(run.completed_at);
+    const terminal=run.stage==='retry_exhausted'||['failed','cancelled'].includes(run.status)||Boolean(run.completed_at);
     if(terminal){showWorkerPending(detail);return;}
     state.workerPollAttempts=attempt+1;
     state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),15000);
@@ -343,7 +343,7 @@ async function loadSavedRun(runId){
       data.run.is_final=['final_ready','final_with_gaps'].includes(detail.run.status);
       applyData(data);showWorkerPending(detail);
     }else{hideResultPanelsUntilReady();showQueuedRun(detail.run);}
-    if(detail.run.stage!=='retry_exhausted'&&!['failed','cancelled','final_ready','final_with_gaps'].includes(detail.run.status)&&!detail.run.completed_at){
+    if(detail.run.stage!=='retry_exhausted'&&!['failed','cancelled'].includes(detail.run.status)&&!detail.run.completed_at){
       pollQueuedRun(runId,version,0);
     }
     toast('Saved analysis restored from your account');
