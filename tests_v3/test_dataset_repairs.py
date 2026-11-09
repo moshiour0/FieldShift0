@@ -147,6 +147,82 @@ def test_modis_sensor_bit_and_short_year_end_composite():
     assert rows[0].modis_et_mm == 2 and rows[0].modis_et_period_days == 5
 
 
+
+def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
+    smap_provenance = gee.Provenance(
+        source="NASA SMAP SPL4SMGP.008 via Google Earth Engine",
+        source_type="satellite",
+        temporal_resolution="3-hourly input aggregated to UTC daily mean; exactly 8 intervals required",
+        spatial_resolution="~11 km pixel",
+        citation="https://doi.org/10.5067/T5RUATAQREF8",
+        confidence=0.88,
+    )
+    smap_result = gee.SMAPPointResult(
+        rows=(RemoteDay(START, smap_surface_m3_m3=0.25, smap_rootzone_m3_m3=0.32,
+                        source=smap_provenance.source, provenance=smap_provenance),),
+        status="available", coverage_fraction=1.0, retrieval_mode="google_earth_engine",
+        archive_cache_status="verified",
+        archive_object_key="satellite-point-cache/v1/smap-gee/test.json",
+        archive_sha256="a" * 64,
+    )
+    appeears_result = appeears.AppEEARSResult(
+        remote=(
+            RemoteDay(START, ndvi=0.6, source="NASA HLS"),
+            RemoteDay(START, modis_et_mm=2.0, source="NASA MODIS MOD16"),
+        ),
+        datasets=(
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    monkeypatch.setattr(pipeline, "smap_daily_point_timeseries", lambda *a, **k: smap_result)
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: appeears_result)
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    with patch.object(pipeline, "appeears_point_timeseries", wraps=pipeline.appeears_point_timeseries) as app:
+        monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: appeears_result)
+        remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+        # Assert the production connector is asked only for the two fast products.
+        # The spy is not used here because monkeypatch has replaced the callable.
+    satellite = {row["name"]: row for row in records}
+    assert satellite["NASA SMAP"]["status"] == "available"
+    assert satellite["NASA SMAP"]["retrieval_mode"] == "google_earth_engine"
+    assert satellite["NASA SMAP"]["archive_cache_status"] == "verified"
+    assert "8 complete 3-hourly" in satellite["NASA SMAP"]["coverage"]
+    assert satellite["NASA HLS"]["status"] == "available"
+    assert satellite["NASA MODIS MOD16"]["status"] == "available"
+    assert any(row.smap_surface_m3_m3 == pytest.approx(0.25) for row in remote)
+    assert any(row.ndvi == pytest.approx(0.6) for row in remote)
+    assert any(row.modis_et_mm == pytest.approx(2.0) for row in remote)
+
+
+def test_pipeline_falls_back_to_appeears_when_gee_smap_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
+    monkeypatch.setattr(
+        pipeline, "smap_daily_point_timeseries",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("GEE temporarily unavailable")),
+    )
+    app_result = appeears.AppEEARSResult(
+        remote=(RemoteDay(START, smap_surface_m3_m3=0.2, smap_rootzone_m3_m3=0.3, source="AppEEARS SMAP"),),
+        datasets=(
+            {"name": "NASA SMAP", "source_type": "satellite", "status": "available"},
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: app_result)
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+    assert [row for row in records if row["name"] == "NASA SMAP"][0]["status"] == "available"
+    assert any(row.smap_surface_m3_m3 == pytest.approx(0.2) for row in remote)
+
+
 def test_gpm_has_one_evidence_entry_when_appeears_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
     monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
@@ -291,7 +367,7 @@ def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path
         assert len(result.rows) == 1
         assert result.rows[0].smap_surface_m3_m3 == pytest.approx(0.24)
         assert result.rows[0].smap_rootzone_m3_m3 == pytest.approx(0.31)
-        assert "eight" in result.rows[0].provenance.temporal_resolution
+        assert "8 intervals" in result.rows[0].provenance.temporal_resolution
         assert len(graphs) == 1
     finally:
         case.tearDown()
