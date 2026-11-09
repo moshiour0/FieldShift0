@@ -7,7 +7,7 @@ on:
         description: First completed year to archive
         required: true
         type: number
-        default: 2016
+        default: 2025
       end_year:
         description: Last completed year to archive
         required: true
@@ -71,7 +71,7 @@ jobs:
             echo "- Storage: private Google Drive, stable calendar-year objects"
             echo "- This is point-reference data only, NOT a national gridded archive or regional mean."
           } >> "$GITHUB_STEP_SUMMARY"
-          python scripts/google_drive_archive.py verify
+          python scripts/verify_smap_archive_prerequisites.py
 
   ingest:
     name: Archive SMAP point — ${{ matrix.region }}
