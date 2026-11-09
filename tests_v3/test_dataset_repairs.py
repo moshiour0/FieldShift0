@@ -103,16 +103,36 @@ def test_failed_smap_does_not_remove_hls_or_modis(nasa, tmp_path):
     assert "HTTP 400" in result.datasets[0]["error"]
 
 
-def test_pending_tasks_resume_after_serverless_cache_loss(nasa, tmp_path):
+def test_pending_tasks_resume_from_persisted_ids_after_serverless_cache_loss(nasa, tmp_path):
     nasa.pending = True
     first = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path / "cold1")
     assert {d["status"] for d in first.datasets} == {"pending"}
     assert all("resumes" in d["coverage"] for d in first.datasets)
+    saved_task_ids = {
+        {"NASA SMAP": "nasa_smap", "NASA MODIS MOD16": "nasa_modis_mod16", "NASA HLS": "nasa_hls"}[row["name"]]:
+            row["provider_task_id"]
+        for row in first.datasets
+    }
+    assert set(saved_task_ids) == {"nasa_smap", "nasa_modis_mod16", "nasa_hls"}
+    assert all(saved_task_ids.values())
+
+    # Simulate a new Vercel instance with no pending-task files or result cache.
+    # The task IDs persisted by the previous worker attempt must be sufficient.
     for task in nasa.tasks.values():
         task["status"] = "done"
-    second = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path / "cold2")
+    second = appeears.appeears_point_timeseries(
+        24.75,
+        90.41,
+        START,
+        END,
+        cache_dir=tmp_path / "cold2",
+        existing_task_ids=saved_task_ids,
+    )
     assert len(nasa.payloads) == 3
     assert {d["status"] for d in second.datasets} == {"available"}
+    assert all(d["retrieval_mode"] == "live" for d in second.datasets)
+    assert nasa.calls.count(("task", "GET")) == 1
+    assert not any(path == "task" and method == "POST" for path, method in nasa.calls) is False
 
 
 def test_date_aware_modis_selection_avoids_expired_gap_filled_product(nasa):
