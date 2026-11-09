@@ -292,8 +292,9 @@ def smap_daily_point_timeseries(
         seed = ee.Image.constant([0, 0]).rename(["sm_surface", "sm_rootzone"]).selfMask()
         safe_subset = subset.merge(ee.ImageCollection.fromImages([seed]))
         daily = safe_subset.mean()
-        interval_count = subset.select("sm_surface").count().rename("n_intervals")
-        daily = daily.updateMask(interval_count.eq(8)).addBands(interval_count)
+        interval_counts = subset.select(["sm_surface", "sm_rootzone"]).count().rename(["n_surface", "n_rootzone"])
+        complete = interval_counts.select("n_surface").eq(8).And(interval_counts.select("n_rootzone").eq(8))
+        daily = daily.updateMask(complete).addBands(interval_counts)
         stats = daily.reduceRegion(
             reducer=ee.Reducer.first(), geometry=point, scale=11000, maxPixels=10000,
         )
@@ -315,12 +316,13 @@ def smap_daily_point_timeseries(
         properties = feature.get("properties", {}) if isinstance(feature, dict) else {}
         try:
             observed_day = date.fromisoformat(str(properties["date"]))
-            intervals = int(properties.get("n_intervals") or 0)
+            surface_intervals = int(properties.get("n_surface") or 0)
+            rootzone_intervals = int(properties.get("n_rootzone") or 0)
             surface = _finite(properties.get("sm_surface"))
             rootzone = _finite(properties.get("sm_rootzone"))
         except (KeyError, TypeError, ValueError):
             continue
-        if intervals != 8 or surface is None or rootzone is None:
+        if surface_intervals != 8 or rootzone_intervals != 8 or surface is None or rootzone is None:
             continue
         if not 0.0 <= surface <= 0.9 or not 0.0 <= rootzone <= 0.9:
             continue
