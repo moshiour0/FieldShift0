@@ -524,6 +524,78 @@ def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path
         case.tearDown()
 
 
+def test_partial_smap_year_is_not_archived_or_reused_as_a_complete_cache(monkeypatch, tmp_path):
+    import hashlib
+
+    import ee
+    import ee.apitestcase
+
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    objects: dict[str, bytes] = {}
+    calls = []
+    writes = []
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        monkeypatch.setattr(gee.google_drive, "configured", lambda: True)
+        monkeypatch.setattr(gee.google_drive, "get_object", lambda key: objects.get(key))
+
+        def put_object(key: str, content: bytes, *, sha256: str | None = None, mime_type: str = "application/json"):
+            writes.append(key)
+            assert sha256 == hashlib.sha256(content).hexdigest()
+            objects[key] = content
+            return {"id": key}
+
+        monkeypatch.setattr(gee.google_drive, "put_object", put_object)
+
+        def compute(expression):
+            calls.append(ee.serializer.encode(expression))
+            if len(calls) == 1:
+                features = [
+                    {"properties": {
+                        "date": "2025-01-01", "sm_surface": 0.24,
+                        "sm_rootzone": 0.31, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                    {"properties": {
+                        "date": "2025-01-02", "sm_surface": 0.28,
+                        "sm_rootzone": 0.35, "n_surface": 8, "n_rootzone": 7,
+                    }},
+                ]
+            else:
+                features = [
+                    {"properties": {
+                        "date": "2025-01-01", "sm_surface": 0.24,
+                        "sm_rootzone": 0.31, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                    {"properties": {
+                        "date": "2025-01-02", "sm_surface": 0.28,
+                        "sm_rootzone": 0.35, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                ]
+            return {"features": features}
+
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        first = gee.smap_daily_point_timeseries(
+            24.75, 90.41, date(2025, 1, 1), date(2025, 1, 2), tmp_path,
+        )
+        assert first.status == "partial"
+        assert first.archive_cache_status == "not_configured"
+        assert not writes
+
+        # The stale local partial cache must not suppress another live query.
+        second = gee.smap_daily_point_timeseries(
+            24.75, 90.41, date(2025, 1, 1), date(2025, 1, 2), tmp_path,
+        )
+        assert second.status == "available"
+        assert len(second.rows) == 2
+        assert len(calls) == 2
+        assert not writes
+    finally:
+        case.tearDown()
+
+
 def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, tmp_path):
     import hashlib
 
@@ -550,12 +622,17 @@ def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, 
 
         def compute(expression):
             calls.append(ee.serializer.encode(expression))
-            return {"features": [{
-                "properties": {
-                    "date": "2025-01-01", "sm_surface": 0.27,
-                    "sm_rootzone": 0.36, "n_surface": 8, "n_rootzone": 8,
-                }
-            }]}
+            year_start = date(2025, 1, 1)
+            return {"features": [
+                {"properties": {
+                    "date": date.fromordinal(year_start.toordinal() + offset).isoformat(),
+                    "sm_surface": 0.27,
+                    "sm_rootzone": 0.36,
+                    "n_surface": 8,
+                    "n_rootzone": 8,
+                }}
+                for offset in range(365)
+            ]}
 
         monkeypatch.setattr(ee.data, "computeValue", compute)
         first = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 1), tmp_path / "first")
