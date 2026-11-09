@@ -112,6 +112,42 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertIn("provider_task_id=not.is.null", query)
         self.assertIn("run_id=eq.run-123", query)
 
+    def test_worker_injects_saved_provider_task_ids_into_engine_retry(self) -> None:
+        engine_result = {
+            "run": {"status": "waiting_for_data", "is_final": False},
+            "evidence": {"items": []},
+        }
+        with (
+            patch(
+                "fieldshift.api.analysis_worker._settings",
+                return_value=("https://fieldshift.example.supabase.co", "publishable", "anon-jwt", "w" * 56),
+            ),
+            patch("fieldshift.api.analysis_worker._claim_job", return_value={
+                "id": "job-123", "run_id": "run-123", "attempts": 2,
+            }),
+            patch("fieldshift.api.analysis_worker._load_run", return_value={
+                "request_payload": {"start_date": "2026-06-20", "end_date": "2026-06-30", "field": {"lat": 24.75}},
+            }),
+            patch("fieldshift.api.analysis_worker._load_provider_task_ids", return_value={
+                "nasa_smap": "smap-task-123", "nasa_hls": "hls-task-456",
+            }),
+            patch("fieldshift.api.product.create_analysis", return_value=engine_result) as create,
+            patch("fieldshift.api.analysis_worker._save_result", return_value={
+                "run_id": "run-123", "status": "waiting_for_data", "revision": 2, "job_status": "retrying",
+            }),
+        ):
+            result = analysis_worker.process_one("w" * 56)
+
+        payload = create.call_args.args[0]
+        self.assertEqual(payload["_provider_task_ids"], {
+            "nasa_smap": "smap-task-123", "nasa_hls": "hls-task-456",
+        })
+        self.assertNotIn("_provider_task_ids", {
+            "start_date": "2026-06-20", "end_date": "2026-06-30", "field": {"lat": 24.75},
+        })
+        self.assertEqual(result["run_id"], "run-123")
+        self.assertEqual(result["status"], "waiting_for_data")
+
     def test_worker_api_uses_publishable_key_and_anon_jwt_role_context(self) -> None:
         response = MagicMock()
         response.__enter__.return_value = response
