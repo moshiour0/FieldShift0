@@ -292,7 +292,9 @@ def _load_optional_remote(
                     "quality_status": "all_eight_intervals_present" if smap_result.status == "available" else "incomplete_date_coverage",
                     "quality_note": (
                         "No missing 3-hour intervals or days were imputed. SPL4SMGP.008 is an assimilated "
-                        "L4 geophysical estimate, not an in-situ farm sensor."
+                        "L4 geophysical estimate, not an in-situ farm sensor. The crop-water engine uses "
+                        "a SMAP root-zone observation only when one falls within seven days of planting; "
+                        "otherwise it uses the explicit 35% TAW initial-depletion default."
                     ),
                     "retry_after_seconds": smap_result.retry_after_seconds,
                     "archive_cache_status": smap_result.archive_cache_status,
