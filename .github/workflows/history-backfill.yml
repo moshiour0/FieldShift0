@@ -1,0 +1,117 @@
+name: Backfill nine-region NASA POWER daily history
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: First completed year to archive (2016 or later)
+        required: true
+        type: number
+        default: 2025
+      end_year:
+        description: Last completed year to archive (must be before the current year)
+        required: true
+        type: number
+        default: 2025
+permissions:
+  contents: read
+concurrency:
+  group: fieldshift-power-history-backfill
+  cancel-in-progress: false
+jobs:
+  preflight:
+    name: Verify Google Drive archive prerequisites
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate branch, credentials, folder access and year window
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          START_YEAR: ${{ inputs.start_year }}
+          END_YEAR: ${{ inputs.end_year }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "feat/krishinexus-real-data-school-lab" ]]; then
+            echo "::error title=Wrong branch::Select feat/krishinexus-real-data-school-lab in the Run workflow branch selector. No Drive or NASA request was started."
+            exit 1
+          fi
+          if [[ -z "$GOOGLE_DRIVE_CLIENT_ID" || -z "$GOOGLE_DRIVE_CLIENT_SECRET" || -z "$GOOGLE_DRIVE_REFRESH_TOKEN" || -z "$GOOGLE_DRIVE_FOLDER_ID" ]]; then
+            echo "::error title=Google Drive archive not configured::Add all four GOOGLE_DRIVE_* repository Actions Secrets before running this workflow. No NASA data request was started."
+            exit 1
+          fi
+          if ! [[ "$START_YEAR" =~ ^[0-9]{4}$ && "$END_YEAR" =~ ^[0-9]{4}$ ]]; then
+            echo "::error::Years must be four-digit calendar years."
+            exit 1
+          fi
+          current_year="$(date -u +%Y)"
+          if (( START_YEAR < 2016 || END_YEAR < START_YEAR || END_YEAR >= current_year || END_YEAR - START_YEAR > 29 )); then
+            echo "::error::Select completed calendar years from 2016 onward, in ascending order, with a maximum 30-year window."
+            exit 1
+          fi
+          {
+            echo "## NASA POWER historical archive"
+            echo "- Requested years: $START_YEAR–$END_YEAR"
+            echo "- Destination: private Google Drive / FieldShift0 Archive / power-history/{region}/{year}.json"
+            echo "- Regions: all nine configured representative points"
+            echo "- Parallel region workers: 3"
+            echo "- Existing checksum-valid archive files are reused on reruns."
+          } >> "$GITHUB_STEP_SUMMARY"
+          python scripts/google_drive_archive.py verify
+  ingest:
+    name: Archive ${{ matrix.region }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        region:
+          - mymensingh
+          - dhaka
+          - rajshahi
+          - rangpur
+          - khulna
+          - barishal
+          - sylhet
+          - chattogram
+          - rangamati
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FieldShift
+        run: python -m pip install -e .
+      - name: Fetch, quality-check and publish completed daily years
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          REGION: ${{ matrix.region }}
+          START_YEAR: ${{ inputs.start_year }}
+          END_YEAR: ${{ inputs.end_year }}
+        run: |
+          set -euo pipefail
+          python scripts/prefetch_history.py --regions "$REGION" --start-year "$START_YEAR" --end-year "$END_YEAR" --pause 2
+      - name: Record region result
+        if: always()
+        env:
+          REGION: ${{ matrix.region }}
+          START_YEAR: ${{ inputs.start_year }}
+          END_YEAR: ${{ inputs.end_year }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## $REGION"
+            echo "- Requested years: $START_YEAR–$END_YEAR"
+            echo "- Job result: $JOB_STATUS"
+            echo "- Google Drive path: power-history/$REGION/"
+          } >> "$GITHUB_STEP_SUMMARY"
