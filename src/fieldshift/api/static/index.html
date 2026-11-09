@@ -282,10 +282,14 @@ function renderRunReadiness(data){
   const labels={
     preliminary_ready:['PRELIMINARY RESULT','Some data are still processing or the required core weather input is not ready. This result is not final.'],
     waiting_for_data:['WAITING FOR DATA','A required dataset is not ready. No final prediction should be used yet.'],
+    running:['ANALYSIS RUNNING','Evidence checks have passed. The analysis result is still being computed.'],
     final_with_gaps:['FINAL RESULT · DATA GAPS','The core weather input is ready, but one or more supplemental sources are incomplete or unavailable. Review the evidence list.'],
     final_ready:['FINAL RESULT · VERIFIED INPUTS','Required core evidence and configured/requested sources passed their readiness checks.']
   };
-  const copy=labels[run.status]||['RUN STATUS',run.status_message||'The run status is being evaluated.'];
+  const diagnosticOnly=run.status==='preliminary_ready'&&run.prediction_eligible===false;
+  const copy=diagnosticOnly
+    ? ['DIAGNOSTIC PREVIEW · NOT FOR FIELD DECISIONS','Required observed-weather evidence is not ready. Do not use these rankings as a field recommendation.']
+    : (labels[run.status]||['RUN STATUS',run.status_message||'The run status is being evaluated.']);
   qs('#run-readiness-title').textContent=copy[0];
   qs('#run-readiness-message').textContent=run.status_message||copy[1];
   box.classList.remove('hidden');
