@@ -23,9 +23,9 @@ from .gee import (
     apply_monthly_deltas,
     gee_credentials_configured,
     gpm_daily_point_timeseries,
-    smap_daily_point_timeseries,
     nex_gddp_monthly_deltas,
     nex_models,
+    smap_daily_point_timeseries,
 )
 from .indicators import compute_rotation_indicators
 from .models import (
