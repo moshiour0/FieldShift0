@@ -39,7 +39,7 @@ class TestDurableWorkerAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertFalse(response.json()["processed"])
-        process.assert_called_once_with()
+        process.assert_called_once_with("worker-secret-for-tests")
 
     def test_worker_returns_processed_result(self) -> None:
         expected = {
