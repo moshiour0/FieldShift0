@@ -214,6 +214,7 @@ def _load_optional_remote(
     end: dt.date,
     cache_dir: Path,
     allow_live: bool = True,
+    provider_task_ids: dict[str, str] | None = None,
 ) -> tuple:
     remote: list[Any] = []
     loaders = [
@@ -261,7 +262,12 @@ def _load_optional_remote(
         ]
         try:
             result = appeears_point_timeseries(
-                field.lat, field.lon, start, end, cache_dir=cache_dir,
+                field.lat,
+                field.lon,
+                start,
+                end,
+                cache_dir=cache_dir,
+                existing_task_ids=provider_task_ids,
             )
             remote.extend(result.remote)
             for record in result.datasets:
@@ -350,7 +356,16 @@ def _merge_remote(rows) -> tuple:
     return tuple(sorted(by.values(), key=lambda x: x.d))
 
 
-def load_scenarios(field: FieldV2, year: int, input_dir: Path | None, datasets: list[dict], *, start_date=None, end_date=None) -> list[Scenario]:
+def load_scenarios(
+    field: FieldV2,
+    year: int,
+    input_dir: Path | None,
+    datasets: list[dict],
+    *,
+    start_date=None,
+    end_date=None,
+    provider_task_ids: dict[str, str] | None = None,
+) -> list[Scenario]:
     observation_start, observation_end = evidence_dates(start_date, end_date, year=year)
     input_dir = input_dir or (ROOT / "data" / "v3")
     try:
@@ -433,7 +448,14 @@ def load_scenarios(field: FieldV2, year: int, input_dir: Path | None, datasets: 
     satellite_start, satellite_end = observation_start, observation_end
     satellite_cache_dir = Path(os.getenv("FIELD_SHIFT_CACHE_DIR", str(input_dir / "cache")))
     remote_rows = _load_optional_remote(
-        input_dir, datasets, field, satellite_start, satellite_end, satellite_cache_dir, allow_live=nasa_ok,
+        input_dir,
+        datasets,
+        field,
+        satellite_start,
+        satellite_end,
+        satellite_cache_dir,
+        allow_live=nasa_ok,
+        provider_task_ids=provider_task_ids,
     )
     remote = _merge_remote(remote_rows)
     baseline_scenario = Scenario(
@@ -672,6 +694,7 @@ def run_v3(
     field_override: dict[str, Any] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    provider_task_ids: dict[str, str] | None = None,
 ) -> EngineRun:
     observation_start, observation_end = evidence_dates(start_date, end_date, year=year)
     if start_date is not None:
@@ -829,7 +852,15 @@ def run_v3(
                 "fallback": "Enter a soil-test report or a clearly labeled field estimate; the model uses generic physical defaults for missing properties",
             })
 
-    scenarios = load_scenarios(field, year, input_dir, datasets, start_date=observation_start, end_date=observation_end)
+    scenarios = load_scenarios(
+        field,
+        year,
+        input_dir,
+        datasets,
+        start_date=observation_start,
+        end_date=observation_end,
+        provider_task_ids=provider_task_ids,
+    )
     rotations, rejected = _unique_rotations(crops, cfg, field, year)
     rotation_map = {r.rotation_id: r for r in rotations}
     indicator_matrix: dict[str, dict[str, list[float]]] = {s.name: {} for s in scenarios}
