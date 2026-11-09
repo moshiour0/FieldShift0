@@ -9,6 +9,8 @@
 
 ## 0. Read this first in a future chat
 
+> **Additional scope handoff:** Read [`NASA_DATA_LATENCY_AND_SMAP_ARCHIVE_PLAN.md`](./NASA_DATA_LATENCY_AND_SMAP_ARCHIVE_PLAN.md) for the user's AppEEARS 53-request latency evidence, SMAP-first archive decision, exact-location cache, preliminary-result policy, and phased implementation/acceptance gates. This file governs the latency/archive scope; the sections below retain the durable queue/auth/worker history.
+
 This file is the continuity document for the implementation. A new assistant/session should read this file first, then inspect the current branch head, PR #1, latest CI run, and current Vercel preview before editing anything. Do not ask the user to repeat the requirements below.
 
 ### Current verified repository state
