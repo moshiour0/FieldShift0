@@ -240,8 +240,9 @@ def integration_status() -> dict[str, Any]:
             "saved_runs": "supabase_postgres",
         },
         "analysis_state": {
-            "storage": "process_memory_for_guest_runs_and_supabase_for_signed_in_completed_runs",
-            "durable_across_instances": bool(supabase_auth.settings()["configured"]),
+            "storage": "process_memory_for_active_execution_and_supabase_for_saved_completed_runs",
+            "completed_signed_in_runs_durable_across_instances": bool(supabase_auth.settings()["configured"]),
+            "active_execution_durable_across_instances": False,
         },
     }
 
