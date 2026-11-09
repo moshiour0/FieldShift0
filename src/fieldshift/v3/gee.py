@@ -428,7 +428,11 @@ def smap_daily_point_timeseries(
     )
     modes = {result.retrieval_mode for result in results}
     retrieval_mode = next(iter(modes)) if len(modes) == 1 else "mixed_chunks"
-    chunk_objects = tuple(key for result in results for key in result.archive_object_keys)
+    chunk_objects = tuple(
+        key
+        for result in results
+        for key in (result.archive_object_keys or ((result.archive_object_key,) if result.archive_object_key else ()))
+    )
     archive_states = {result.archive_cache_status for result in results}
     archive_status = (
         "verified" if archive_states == {"verified"} else
