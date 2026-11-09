@@ -125,6 +125,7 @@ declare
     v_status_message text;
     v_run_status text;
     v_run_status_message text;
+    v_source_key text;
 begin
     v_header_token := nullif(current_setting('request.headers', true), '')::jsonb ->> 'x-fieldshift-worker';
     if not private.worker_token_matches(p_worker_token)
@@ -161,56 +162,70 @@ begin
 
     for v_source in select value from jsonb_array_elements(p_sources)
     loop
-        insert into public.analysis_run_sources (
-            run_id, source_key, source_name, source_type, required,
-            provider, product_key, provider_task_id, status,
-            requested_start, requested_end, coverage_start, coverage_end,
-            coverage_fraction, attempt_count, max_attempts, next_retry_at, last_checked_at,
-            last_error_code, last_error_message, quality, provenance
-        )
-        values (
-            v_job.run_id,
-            coalesce(nullif(v_source->>'source_key', ''), 'unknown_source'),
-            coalesce(nullif(v_source->>'source_name', ''), 'Evidence source'),
-            coalesce(nullif(v_source->>'source_type', ''), 'unknown'),
-            coalesce((v_source->>'required')::boolean, false),
-            v_source->>'provider',
-            v_source->>'product_key',
-            v_source->>'provider_task_id',
-            coalesce(nullif(v_source->>'status', ''), 'failed'),
-            nullif(v_source->>'requested_start', '')::date,
-            nullif(v_source->>'requested_end', '')::date,
-            nullif(v_source->>'coverage_start', '')::date,
-            nullif(v_source->>'coverage_end', '')::date,
-            nullif(v_source->>'coverage_fraction', '')::numeric,
-            1,
-            50,
-            nullif(v_source->>'next_retry_at', '')::timestamptz,
-            now(),
-            v_source->>'last_error_code',
-            v_source->>'last_error_message',
-            coalesce(v_source->'quality', '{}'::jsonb),
-            coalesce(v_source->'provenance', '{}'::jsonb)
-        )
-        on conflict (run_id, source_key) do update
-        set provider = excluded.provider,
-            product_key = excluded.product_key,
-            provider_task_id = coalesce(excluded.provider_task_id, public.analysis_run_sources.provider_task_id),
-            status = excluded.status,
-            requested_start = excluded.requested_start,
-            requested_end = excluded.requested_end,
-            coverage_start = excluded.coverage_start,
-            coverage_end = excluded.coverage_end,
-            coverage_fraction = excluded.coverage_fraction,
-            attempt_count = public.analysis_run_sources.attempt_count + 1,
-            max_attempts = 50,
-            next_retry_at = excluded.next_retry_at,
-            last_checked_at = now(),
-            last_error_code = excluded.last_error_code,
-            last_error_message = excluded.last_error_message,
-            quality = excluded.quality,
-            provenance = excluded.provenance,
-            updated_at = now();
+        v_source_key := coalesce(nullif(v_source->>'source_key', ''), 'unknown_source');
+
+        -- Update first so the worker needs only narrowly scoped column UPDATE
+        -- privileges. INSERT ... ON CONFLICT DO UPDATE requires table-wide
+        -- UPDATE permission in PostgreSQL, which would widen the RLS surface.
+        update public.analysis_run_sources
+           set provider = v_source->>'provider',
+               product_key = v_source->>'product_key',
+               provider_task_id = coalesce(
+                   nullif(v_source->>'provider_task_id', ''),
+                   public.analysis_run_sources.provider_task_id
+               ),
+               status = coalesce(nullif(v_source->>'status', ''), 'failed'),
+               requested_start = nullif(v_source->>'requested_start', '')::date,
+               requested_end = nullif(v_source->>'requested_end', '')::date,
+               coverage_start = nullif(v_source->>'coverage_start', '')::date,
+               coverage_end = nullif(v_source->>'coverage_end', '')::date,
+               coverage_fraction = nullif(v_source->>'coverage_fraction', '')::numeric,
+               attempt_count = public.analysis_run_sources.attempt_count + 1,
+               max_attempts = 50,
+               next_retry_at = nullif(v_source->>'next_retry_at', '')::timestamptz,
+               last_checked_at = now(),
+               last_error_code = v_source->>'last_error_code',
+               last_error_message = v_source->>'last_error_message',
+               quality = coalesce(v_source->'quality', '{}'::jsonb),
+               provenance = coalesce(v_source->'provenance', '{}'::jsonb),
+               updated_at = now()
+         where run_id = v_job.run_id
+           and source_key = v_source_key;
+
+        if not found then
+            insert into public.analysis_run_sources (
+                run_id, source_key, source_name, source_type, required,
+                provider, product_key, provider_task_id, status,
+                requested_start, requested_end, coverage_start, coverage_end,
+                coverage_fraction, attempt_count, max_attempts, next_retry_at, last_checked_at,
+                last_error_code, last_error_message, quality, provenance
+            )
+            values (
+                v_job.run_id,
+                v_source_key,
+                coalesce(nullif(v_source->>'source_name', ''), 'Evidence source'),
+                coalesce(nullif(v_source->>'source_type', ''), 'unknown'),
+                coalesce((v_source->>'required')::boolean, false),
+                v_source->>'provider',
+                v_source->>'product_key',
+                nullif(v_source->>'provider_task_id', ''),
+                coalesce(nullif(v_source->>'status', ''), 'failed'),
+                nullif(v_source->>'requested_start', '')::date,
+                nullif(v_source->>'requested_end', '')::date,
+                nullif(v_source->>'coverage_start', '')::date,
+                nullif(v_source->>'coverage_end', '')::date,
+                nullif(v_source->>'coverage_fraction', '')::numeric,
+                1,
+                50,
+                nullif(v_source->>'next_retry_at', '')::timestamptz,
+                now(),
+                v_source->>'last_error_code',
+                v_source->>'last_error_message',
+                coalesce(v_source->'quality', '{}'::jsonb),
+                coalesce(v_source->'provenance', '{}'::jsonb)
+            )
+            on conflict (run_id, source_key) do nothing;
+        end if;
     end loop;
 
     v_run_status := case
