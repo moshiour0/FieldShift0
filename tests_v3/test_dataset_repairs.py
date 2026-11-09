@@ -379,6 +379,26 @@ def test_earth_engine_graphs_build_with_official_python_client(monkeypatch, tmp_
 
 
 
+def test_initial_smap_cache_miss_returns_pending_without_live_gee(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+    monkeypatch.setattr(gee.google_drive, "configured", lambda: False)
+
+    def unexpected_live_query():
+        raise AssertionError("The initial cache-only worker attempt must not query Earth Engine")
+
+    monkeypatch.setattr(gee, "_initialise_ee", unexpected_live_query)
+    result = gee.smap_daily_point_timeseries(
+        24.75, 90.41, date(2025, 1, 1), date(2025, 1, 10), tmp_path,
+        allow_live_query=False,
+    )
+    assert result.status == "pending"
+    assert result.rows == ()
+    assert result.retry_after_seconds == 3600
+    assert result.retrieval_mode == "cache_miss"
+    assert result.chunk_count == 1
+
+
 def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path):
     import ee
     import ee.apitestcase
