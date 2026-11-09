@@ -304,24 +304,14 @@ begin
         else 'retrying'
     end;
 
-    update private.analysis_run_jobs
-       set status = v_job_status,
-           available_at = case when v_job_status = 'retrying' then p_retry_at else available_at end,
-           locked_at = null,
-           heartbeat_at = now(),
-           lease_expires_at = null,
-           lock_owner = null,
-           last_error_code = case when v_job_status = 'failed' then 'retry_budget_exhausted' else null end,
-           last_error_message = case when v_job_status = 'failed' then 'Provider data remained pending after the retry budget.' else null end,
-           updated_at = now()
-     where id = p_job_id;
-
     v_status_message := case
         when v_job_status = 'retrying' then 'Evidence is still arriving. The saved analysis will be checked again automatically.'
         when v_job_status = 'failed' then 'Automatic evidence refresh reached its retry limit. The saved result remains available.'
         else 'Evidence reconciliation completed.'
     end;
 
+    -- Append the event while the current lease is still active so the
+    -- token/lease-gated event RLS policy can authorize this one insert.
     insert into public.analysis_run_events (
         run_id, event_type, from_status, to_status, safe_message, details
     )
@@ -337,6 +327,19 @@ begin
             'job_status', v_job_status
         )
     );
+
+    -- Release the job lease only after every run-scoped write is complete.
+    update private.analysis_run_jobs
+       set status = v_job_status,
+           available_at = case when v_job_status = 'retrying' then p_retry_at else available_at end,
+           locked_at = null,
+           heartbeat_at = now(),
+           lease_expires_at = null,
+           lock_owner = null,
+           last_error_code = case when v_job_status = 'failed' then 'retry_budget_exhausted' else null end,
+           last_error_message = case when v_job_status = 'failed' then 'Provider data remained pending after the retry budget.' else null end,
+           updated_at = now()
+     where id = p_job_id;
 
     return jsonb_build_object(
         'run_id', v_job.run_id,
