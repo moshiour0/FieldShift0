@@ -23,6 +23,7 @@ from .gee import (
     apply_monthly_deltas,
     gee_credentials_configured,
     gpm_daily_point_timeseries,
+    smap_daily_point_timeseries,
     nex_gddp_monthly_deltas,
     nex_models,
 )
@@ -254,6 +255,63 @@ def _load_optional_remote(
                     f"for automatic point sampling, or provide {p.as_posix()} using its documented CSV schema."
                 ),
             })
+    use_gee_smap = False
+    if allow_live and start <= end and gee_credentials_configured():
+        existing_smap = next(
+            (row for row in datasets if row.get("name") == "NASA SMAP" and row.get("status") == "available"),
+            None,
+        )
+        if existing_smap is not None:
+            # A supplied QA-checked SMAP file already satisfies this source.
+            use_gee_smap = True
+        else:
+            datasets[:] = [row for row in datasets if not (
+                row.get("name") == "NASA SMAP" and row.get("status") == "not_configured"
+            )]
+            try:
+                smap_result = smap_daily_point_timeseries(
+                    field.lat, field.lon, start, end, cache_dir=cache_dir,
+                )
+                remote.extend(smap_result.rows)
+                expected_smap_days = (end - start).days + 1
+                smap_provenance = smap_result.rows[0].provenance if smap_result.rows else None
+                smap_record = {
+                    "name": "NASA SMAP",
+                    "source_type": "satellite",
+                    "status": smap_result.status,
+                    "coverage": (
+                        f"{len(smap_result.rows)}/{expected_smap_days} requested daily values; "
+                        "each accepted value is the UTC mean of eight complete 3-hourly SMAP L4 intervals."
+                    ),
+                    "coverage_fraction": smap_result.coverage_fraction,
+                    "retrieval_mode": smap_result.retrieval_mode,
+                    "data_start_date": smap_result.rows[0].d.isoformat() if smap_result.rows else None,
+                    "data_end_date": smap_result.rows[-1].d.isoformat() if smap_result.rows else None,
+                    "temporal_resolution": "3-hourly source aggregated to daily UTC mean (8/8 intervals required)",
+                    "spatial_resolution": "~11 km GEE pixel; native SMAP L4 grid ~9 km",
+                    "quality_status": "all_eight_intervals_present" if smap_result.status == "available" else "incomplete_date_coverage",
+                    "quality_note": (
+                        "No missing 3-hour intervals or days were imputed. SPL4SMGP.008 is an assimilated "
+                        "L4 geophysical estimate, not an in-situ farm sensor."
+                    ),
+                    "retry_after_seconds": smap_result.retry_after_seconds,
+                    "archive_cache_status": smap_result.archive_cache_status,
+                    "archive_object_key": smap_result.archive_object_key,
+                    "archive_sha256": smap_result.archive_sha256,
+                    "citation": "https://doi.org/10.5067/T5RUATAQREF8",
+                    "provenance": asdict(smap_provenance) if smap_provenance else None,
+                }
+                datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
+                datasets.append(smap_record)
+                use_gee_smap = smap_result.status in {"available", "partial", "pending"}
+            except Exception as exc:
+                datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
+                datasets.append({
+                    "name": "NASA SMAP", "source_type": "satellite", "status": "unavailable",
+                    "error": safe_error(exc),
+                    "setup_hint": "Earth Engine SMAP query failed; exact-location AppEEARS fallback will be attempted when Earthdata credentials are configured.",
+                })
+
     if allow_live and credentials_configured() and start <= end:
         replace_names = {"NASA SMAP", "NASA HLS", "NASA MODIS MOD16"}
         datasets[:] = [
@@ -268,6 +326,7 @@ def _load_optional_remote(
                 end,
                 cache_dir=cache_dir,
                 existing_task_ids=provider_task_ids,
+                source_keys={"hls_vi", "modis_et"} if use_gee_smap else None,
             )
             remote.extend(result.remote)
             for record in result.datasets:
