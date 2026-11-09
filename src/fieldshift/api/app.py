@@ -21,6 +21,7 @@ from fieldshift.api.product import (
 from fieldshift.v3.appeears import credentials_configured as appeears_credentials_configured
 from fieldshift.v3.gee import gee_credentials_configured
 from fieldshift.v3.history import REGIONS, history_summary, read_year
+from fieldshift.v3 import google_drive
 from fieldshift.v3.history_extended import history_date_range, read_ytd
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
 from fieldshift.v3.refresh_jobs import create_refresh, get_refresh
@@ -84,6 +85,12 @@ def integration_status() -> dict[str, Any]:
                 "credentials_validated": False,
             },
             "soilgrids": {"enabled": soilgrids_enabled},
+        },
+        "archive_storage": {
+            "provider": "google_drive" if google_drive.configured() else "bundled_filesystem",
+            "credentials_configured": google_drive.configured(),
+            "connection_tested": False,
+            "private": True,
         },
         "analysis_state": {"storage": "process_memory", "durable_across_instances": False},
     }
