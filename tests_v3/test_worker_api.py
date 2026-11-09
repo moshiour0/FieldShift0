@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from fieldshift.api.app import app
 from fieldshift.api.analysis_worker import WorkerAPIError
+from fieldshift.api.app import app
 
 
 class TestDurableWorkerAPI(unittest.TestCase):
