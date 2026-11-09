@@ -144,6 +144,29 @@ def save_completed_analysis(
     return result
 
 
+
+def queue_analysis_request(
+    *,
+    access_token: str,
+    client_request_id: str,
+    request_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Accept one authenticated request into the database-owned durable queue."""
+    config = settings()
+    result = _request_json(
+        f"{config['url']}/rest/v1/rpc/queue_analysis_request",
+        method="POST",
+        headers={**_headers(access_token), "Content-Type": "application/json"},
+        payload={
+            "p_client_request_id": client_request_id,
+            "p_request_payload": request_payload,
+        },
+    )
+    if not isinstance(result, dict) or not result.get("run_id"):
+        raise SupabaseAPIError(502, "Supabase did not confirm that the analysis was queued.")
+    return result
+
+
 def persist_product_analysis(
     *,
     access_token: str,
