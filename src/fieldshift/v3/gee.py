@@ -414,12 +414,14 @@ def smap_daily_point_timeseries(
     if expected > 30 * 366:
         raise ValueError("SMAP historical point window cannot exceed 30 years")
 
+    # Stable calendar-year chunks make cache entries reusable across
+    # different user-selected date windows for the same exact point.
     chunks: list[tuple[date, date]] = []
-    cursor = start
-    while cursor <= end:
-        chunk_end = min(end, cursor + timedelta(days=365))
-        chunks.append((cursor, chunk_end))
-        cursor = chunk_end + timedelta(days=1)
+    for year in range(start.year, end.year + 1):
+        chunk_start = max(start, date(year, 1, 1), date(2015, 3, 31))
+        chunk_end = min(end, date(year, 12, 31), date.today())
+        if chunk_start <= chunk_end:
+            chunks.append((chunk_start, chunk_end))
 
     results = [
         _smap_daily_point_timeseries_window(
@@ -427,7 +429,14 @@ def smap_daily_point_timeseries(
         )
         for chunk_start, chunk_end in chunks
     ]
-    by_date = {row.d: row for result in results for row in result.rows}
+    # Stored year chunks can contain dates outside this user's exact request.
+    # Slice only after reading/validating the whole stable chunk object.
+    by_date = {
+        row.d: row
+        for result in results
+        for row in result.rows
+        if start <= row.d <= end
+    }
     rows = tuple(by_date[key] for key in sorted(by_date))
     retry_values = [result.retry_after_seconds for result in results if result.retry_after_seconds is not None]
     retry_after = max(retry_values, default=None)
