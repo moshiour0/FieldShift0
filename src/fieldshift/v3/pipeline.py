@@ -18,6 +18,7 @@ from .dates import evidence_dates
 from .diagnostics import safe_error
 from .economics import draw_crop_parameters
 from .explain import explain
+from . import google_drive
 from .gee import (
     NEXDeltaResult,
     apply_monthly_deltas,
@@ -257,7 +258,7 @@ def _load_optional_remote(
                 ),
             })
     use_gee_smap = False
-    if allow_live and start <= end and gee_credentials_configured():
+    if allow_live and start <= end and (gee_credentials_configured() or google_drive.configured()):
         existing_smap = next(
             (row for row in datasets if row.get("name") == "NASA SMAP" and row.get("status") == "available"),
             None,
