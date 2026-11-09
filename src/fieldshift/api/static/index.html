@@ -41,6 +41,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 @media(max-width:1100px){.hero-grid,.workspace,.priority-layout,.explain-grid,.evidence-grid,.report{grid-template-columns:1fr}.strategy-grid{grid-template-columns:repeat(2,1fr)}.hero-visual{min-height:360px}.metrics{grid-template-columns:repeat(2,1fr)}.trust{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:720px){.container{width:min(100% - 20px,var(--max))}.topbar-inner{height:64px}.top-actions .ghost{display:none}.hero{padding:48px 0 28px}.hero h1{font-size:46px}.hero p{font-size:17px}.hero-visual{min-height:310px;border-radius:22px}.trust{grid-template-columns:1fr 1fr}.section{padding-bottom:52px}.section-head{align-items:flex-start;flex-direction:column}.section-head h2{font-size:28px}.metrics{grid-template-columns:1fr 1fr}.priority-grid{grid-template-columns:1fr}.strategy-grid{grid-template-columns:1fr}.form-row,.form-row.soil-texture{grid-template-columns:1fr}.map-card,.map-card #workspace-map{min-height:390px;height:390px}.scenario-row{grid-template-columns:106px 1fr 58px}.scenario-row span{font-size:10px}.drawer-panel{width:100%;max-height:91vh;border-radius:25px 25px 0 0}.footer-grid{grid-template-columns:1fr}.hero-actions .primary,.hero-actions .secondary{flex:1}.topbar .brand small{display:none}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+@media(max-width:720px){.topbar-inner .brand{flex-shrink:0}.top-actions{max-width:58vw;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}.top-actions::-webkit-scrollbar{display:none}.top-actions .secondary{padding:7px 8px;font-size:10px;white-space:nowrap}}
 
 .account-panel{display:grid;gap:14px}.account-panel .field input{width:100%}.account-runs{display:grid;gap:9px}.account-run{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:#fffef9;border:1px solid var(--line);border-radius:14px;padding:12px}.account-run strong{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.04em}.account-run span,.account-run small{display:block;color:var(--muted);font-size:11px;line-height:1.45;margin-top:4px}.account-run small{font-size:11px}.account-run button{padding:8px 11px}
 </style>
@@ -281,6 +282,7 @@ async function loadAccountRuns(){
 }
 async function loadSavedRun(runId){
   try{
+    stopEvidenceRefresh();state.pendingAttempts=0;
     const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
     if(!detail.latest_result?.result_payload)throw Error('This saved run has no result snapshot yet.');
     const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
