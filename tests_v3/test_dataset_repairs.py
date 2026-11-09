@@ -187,6 +187,54 @@ def test_smap_long_date_windows_use_reusable_366_day_chunks(monkeypatch, tmp_pat
 
 
 
+def test_smap_year_cache_chunks_are_sliced_to_exact_user_window(monkeypatch, tmp_path):
+    calls = []
+
+    def year_chunk(lat, lon, start, end, cache_dir, *, allow_live_query=True):
+        calls.append((start, end))
+        count = (end - start).days + 1
+        rows = tuple(
+            RemoteDay(
+                date.fromordinal(start.toordinal() + offset),
+                smap_surface_m3_m3=0.22,
+                smap_rootzone_m3_m3=0.34,
+                source="NASA SMAP cached year",
+            )
+            for offset in range(count)
+        )
+        number = len(calls)
+        return gee.SMAPPointResult(
+            rows=rows,
+            status="available",
+            coverage_fraction=1.0,
+            retrieval_mode="google_drive_cache",
+            archive_cache_status="verified",
+            archive_object_key=f"satellite-point-cache/year-{start.year}.json",
+            archive_sha256=(str(number) * 64),
+        )
+
+    monkeypatch.setattr(gee, "_smap_daily_point_timeseries_window", year_chunk)
+    requested_start, requested_end = date(2024, 3, 1), date(2025, 6, 30)
+    result = gee.smap_daily_point_timeseries(
+        24.75, 90.41, requested_start, requested_end, tmp_path,
+    )
+
+    assert calls == [
+        (date(2024, 1, 1), date(2024, 12, 31)),
+        (date(2025, 1, 1), date(2025, 12, 31)),
+    ]
+    assert len(result.rows) == (requested_end - requested_start).days + 1
+    assert result.rows[0].d == requested_start
+    assert result.rows[-1].d == requested_end
+    assert all(requested_start <= row.d <= requested_end for row in result.rows)
+    assert result.status == "available"
+    assert result.archive_cache_status == "verified"
+    assert result.archive_object_keys == (
+        "satellite-point-cache/year-2024.json",
+        "satellite-point-cache/year-2025.json",
+    )
+
+
 def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
     monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
