@@ -393,6 +393,7 @@ def _run_engine(payload: dict[str, Any]) -> dict[str, Any]:
         start_date=payload.get("start_date"),
         end_date=payload.get("end_date"),
         provider_task_ids=payload.get("_provider_task_ids"),
+        allow_live_smap=bool(payload.get("_allow_live_smap", True)),
     )
     data = _engine_run_to_dict(result)
     data["run_id"] = f"run_{uuid.uuid4().hex[:12]}"
