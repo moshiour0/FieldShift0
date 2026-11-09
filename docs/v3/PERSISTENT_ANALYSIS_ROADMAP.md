@@ -406,3 +406,60 @@ When continuing this project:
 3. Apply the reviewed migration only to that exact new project; verify RLS, explicit grants, indexes, constraints, and Supabase Security/Performance Advisors.
 4. Add only Preview-scoped Supabase URL and publishable key, plus server-only secret credentials. Never expose the secret/service-role key to browser code.
 5. Implement and test Auth/JWT validation, owner-scoped backend routes, durable run submission, My Runs and resume-on-return before provider workers.
+
+
+## 11. Supabase bootstrap completed — 2026-11-09
+
+### Project and account state
+
+- Supabase project successfully created on the **Free** organization plan after the user explicitly authorized pausing `SARGuardian_Dynamic`.
+- Project: `FieldShift0`
+- Project ref: `bipyrlegaxmhwzwrmcmi`
+- Organization: `moshiour's Org` (`qzrbewvkrtyphlxwuize`)
+- Region: `ap-south-1` (Mumbai)
+- Database: PostgreSQL 17.11; project status `ACTIVE_HEALTHY`.
+- `SARGuardian_Dynamic` project ref `ufwjmhivvnoewjsbteey`: status `INACTIVE` (paused), as requested.
+- `SARGuardian-Monorepo` project ref `qbmhpdprvxssqinnommz`: remains `ACTIVE_HEALTHY`; it was not modified.
+- Organization plan remains Free. Project creation cost check returned $0/month; project creation succeeded with no paid upgrade or add-on.
+
+### Applied migrations
+
+The following migrations were applied successfully to `bipyrlegaxmhwzwrmcmi` and confirmed in migration history:
+
+1. `20261109090000_persistent_analysis_runs.sql` — registered version `20261109080151` as `persistent_analysis_runs`.
+2. `20261109102000_private_worker_tables_and_fk_indexes.sql` — registered version `20261109080257` as `private_worker_tables_and_fk_indexes`.
+3. `20261109104500_private_backend_rls_policies.sql` — registered version `20261109080412` as `private_backend_rls_policies`.
+
+Verified database objects:
+- Public/user-owned: `user_profiles`, `analysis_runs`, `analysis_run_sources`, `analysis_results`, `analysis_run_events`.
+- Private backend-only: `private.dataset_cache`, `private.analysis_run_jobs`.
+- All seven tables have RLS enabled.
+- Authenticated browser grants are limited to profile select/insert/update and select-only access to own run/source/result/event records, further constrained by ownership policies.
+- No `anon` table grants were found for the application tables.
+- `private` schema usage and private table privileges are granted only to `service_role`; explicit service-role RLS policies are present for the two private tables.
+- Added foreign-key indexes for `analysis_run_sources.cache_id`, `analysis_run_jobs.source_id`, and `analysis_run_events.source_id`.
+
+### Advisor verification
+
+- Security Advisor: **no findings** after the private backend service-role policies were added.
+- Performance Advisor: only INFO-level unused-index notices remain because the new database has no application workload yet. The prior unindexed-foreign-key findings were resolved by the added indexes.
+- Health Advisor: no findings at initial bootstrap.
+- Migration and schema verification completed without applying any schema to either SARGuardian project.
+
+### Vercel Preview config
+
+For Vercel project `field-shift0`, these variables were created for Preview only and scoped to Git branch `feat/krishinexus-real-data-school-lab`:
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
+
+They are not set for Production. The publishable key is browser-safe; no secret/service-role key has been placed in frontend code or Vercel browser-exposed variables. The Vercel Preview deployment must be regenerated from the latest branch commit to receive the variables.
+
+### Remaining work — do not mark as complete yet
+
+- Implement Supabase Auth UI and backend JWT verification.
+- Configure the intended sign-in provider and production email delivery/redirect URLs.
+- Implement authenticated create/list/detail/resume APIs using user UUID from verified Auth identity.
+- Implement durable asynchronous execution and source-specific retry handling; the new schema is ready but no worker has been deployed or connected.
+- Integrate the verified Drive archive into run retrieval/cache checks.
+- Add two-user RLS isolation tests against this project and end-to-end sign-in/resume tests.
+- Keep PR #1 Draft/Open/Unmerged and Production unchanged until the user explicitly authorizes release.
