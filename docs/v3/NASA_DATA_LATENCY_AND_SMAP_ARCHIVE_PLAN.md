@@ -292,7 +292,7 @@ The original request must be immutable. A recheck/retry operates on the saved sn
 - The initial Supabase Performance Advisor inspection found duplicate permissive worker RLS policies. They were removed in applied migrations; remaining initplan warnings and current policy state are recorded in Section 7.6. Do not weaken the worker-token restriction.
 - Supabase Health Advisor returned no findings during inspection.
 
-### 7.4 Current code findings that drive the next implementation
+### 7.4 Initial code findings (historical; later changes are recorded in Section 7.6)
 
 - `src/fieldshift/v3/appeears.py`:
   - `SOURCE_DEFINITIONS` currently includes SMAP, MODIS MOD16 and HLS.
@@ -305,7 +305,7 @@ The original request must be immutable. A recheck/retry operates on the saved sn
 - `src/fieldshift/api/analysis_worker.py`:
   - Worker claims one durable job, loads the immutable request, reloads stored provider task IDs, runs the engine, persists the new revision/source state, and schedules retries.
   - Retry delay is derived from pending source metadata and is bounded.
-  - Review `_save_result()` so optional pending SMAP does not incorrectly block a useful preliminary revision, while a required-source gap still blocks final readiness.
+  - This concern was addressed in the later worker and database changes recorded in Section 7.6: optional pending data can remain `preliminary_ready`, while required-source gaps remain `waiting_for_data`.
 - `src/fieldshift/v3/region_catalog.py`:
   - It defines 12 provisional UI groupings, not official AEZ polygons.
   - No official polygon/crosswalk should be inferred.
@@ -413,13 +413,14 @@ The migration has been applied successfully to the non-production Supabase proje
 ### CI and deployment status
 
 - Code-level verification on commit `fb8b512f6515e22b6f762afb5decad042489ffb2`: Python 3.11 and 3.12 each report **169 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff, and mypy (34 source files) pass.
-- Code verification on runtime commit `9f4d047d4624580e15ff12f07c8ada082650ce60`: GitHub Actions runs #506 and #507 both pass. Python 3.11 and 3.12 each report **170 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff and mypy (34 source files) pass.
-- Backfill workflow and documentation commits after that runtime commit passed CI: runs #508 and #509 both completed successfully for PR head `9c437a9196d46356a7dccb4ab1a6210458827bc4`.
-- PR #1 remains Draft/Open/Unmerged. The exact branch head must still be rechecked before any future source edit or deploy.
+- Runtime code verification on `9f4d047d4624580e15ff12f07c8ada082650ce60`: GitHub Actions runs #506 and #507 both pass. Python 3.11 and 3.12 each report **170 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff, and mypy (34 source files) pass.
+- The latest exact PR head at this handoff is `243d43ce80c83183c964a840c79663b02332cb86`. GitHub Actions run #510 (`42620626853`) and #511 (`42620634336`) both completed successfully for this exact head.
 - PR #1 remains Draft/Open/Unmerged.
-- Runtime-bearing READY Preview: `https://field-shift0-igfpm2kn9.vercel.app`, deployment `dpl_ASLoBnTYWcTGCAPbwbZfZ2StDL51`, source commit `62d76f38ced0a67ca479150bc36d447f5103a83c`. The runtime code from `9f4d047...` is included; subsequent commits through the exact PR head changed only the manual workflow and documentation, not runtime application code.
+- Runtime-bearing READY Preview: `https://field-shift0-igfpm2kn9.vercel.app`, deployment `dpl_ASLoBnTYWcTGCAPbwbZfZ2StDL51`, source commit `62d76f38ced0a67ca479150bc36d447f5103a83c`.
+- **Important Preview/runtime gap:** GitHub compare shows the Preview source `62d76f3...` is three commits behind runtime test commit `9f4d047...`. One missing commit, `983438e39cbd42c8c684975a3be02e31eef0e3d7`, changes `src/fieldshift/v3/pipeline.py` so the first four worker attempts defer SMAP even when only AppEEARS is configured. The existing READY Preview therefore does **not** yet exercise this final cache-only/SMAP-deferral behavior. The later PR commits from `9f4d047...` to exact head `243d43...` only add documentation (and the backfill workflow file already existed in the Preview source history); no further runtime code changes occur after `9f4d047...`.
 - Protected Preview `GET /api/auth/config` returned HTTP 200 with `configured=true` and provider `email_magic_link`.
-- A safe idle worker probe was submitted from the FieldShift0 Supabase project only after confirming zero non-terminal jobs (`queued`, `retrying`, `running`). The Vault-backed request to `/api/internal/worker/tick` returned HTTP 200 with `processed=false` and `No queued analysis job is ready.` No user analysis was processed.
+- A safe idle worker probe was submitted from the FieldShift0 Supabase project only after confirming zero non-terminal jobs (`queued`, `retrying`, `running`). The Vault-backed request to `/api/internal/worker/tick` returned HTTP 200 with `processed=false` and `No queued analysis job is ready.` No user analysis was processed. These checks validate the protected route, worker token/bypass and empty-queue Supabase path, not a real user run.
+- The branch Preview environment list shows Supabase auth/worker variables; GEE credentials were not present in that branch-scoped Preview set. The AppEEARS credentials are configured for Preview at project level, so the deployed older runtime may still submit an AppEEARS SMAP task on the first attempt. The latest source branch fixes this, but the fix needs a fresh runtime Preview before it is verified in deployment.
 - The Vercel Hobby runtime-log API returned a 400 retention-limit response for the requested one-hour window; this is an observability-plan limitation, not an application error.
 - No Production deploy, Production environment change, billing change, or PR merge was performed.
 
@@ -428,7 +429,7 @@ The migration has been applied successfully to the non-production Supabase proje
 1. **Real Drive round-trip:** the current automated cache tests mock the Drive adapter. A deployed Preview must upload a real NASA-derived QA-checked SMAP/HLS/MODIS object, read it back, compare bytes/SHA-256, and then prove a cold-instance cache hit.
 2. **Nationwide gridded archive:** the current GEE cache is exact-point data for one selected coordinate per cache key. It is not a raster/area archive for arbitrary Bangladesh fields. Nine reference points alone are not enough. A verified Bangladesh boundary/operational tile geometry and a 2025 SMAP area/tile pilot are still required before describing the archive as Bangladesh-wide.
 3. **Actual 2016–2025 prefetch:** no ten-year national SMAP data backfill has been dispatched. The one-year-per-point cache mechanism is a reusable foundation, not a finished nationwide backfill.
-4. **Live AppEEARS provider-resume:** current code is CI-verified, but a current-head Preview retry has not proven the exact persisted AppEEARS task IDs are reused from Supabase without duplicate task submission.
+4. **Live AppEEARS provider-resume and current SMAP deferral:** the current source code is CI-verified, but the READY Preview is still missing commit `983438e...`; obtain a fresh Preview at or after `9f4d047...`, then prove the first four cache-only attempts, HLS/MODIS resume, fifth-attempt SMAP fetch and exact persisted AppEEARS task-id reuse without duplicate task submission.
 5. **Account continuity:** real Magic Link login, submit a genuine authenticated analysis, close/reopen after one or two days, and two-account access isolation remain to be demonstrated against a Preview whose SHA equals the current branch head.
 6. **15–20 minute experience:** this remains a product target, not a guaranteed SLA. NASA publication lag and provider queues can exceed it; only show a useful preliminary result when required core data and their QA gates are ready.
 7. **GitHub Actions backfill credentials:** the manual nine-reference-point workflow requires all four `GOOGLE_DRIVE_*` repository secrets plus `FIELD_SHIFT_GEE_PROJECT` and `FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON` as GitHub Actions Secrets. The latter two names are present in Vercel server environments, but GitHub Actions secret presence has not been verified. The workflow preflight fails before any NASA request if they are missing. Do not trigger the 2016–2025 backfill until the workflow preflight succeeds.
