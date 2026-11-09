@@ -26,8 +26,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
-from .diagnostics import safe_error
 from . import google_drive
+from .diagnostics import safe_error
 from .models import Provenance, RemoteDay
 from .provenance import now_iso
 
@@ -614,7 +614,7 @@ def _remote_rows(rows: Any) -> tuple[RemoteDay, ...]:
     output: list[RemoteDay] = []
     for raw in rows:
         if not isinstance(raw, dict) or not isinstance(raw.get("d"), str):
-            raise ValueError("Shared satellite cache contains an invalid observation")
+            raise TypeError("Shared satellite cache contains an invalid observation")
         row = dict(raw)
         row["d"] = date.fromisoformat(row["d"])
         if row.get("provenance"):
