@@ -234,6 +234,28 @@ def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict
     return saved
 
 
+def _load_provider_task_ids(run_id: str, worker_token: str) -> dict[str, str]:
+    """Load AppEEARS task IDs already saved for this leased run."""
+    query = urllib.parse.urlencode({
+        "select": "source_key,provider_task_id",
+        "run_id": f"eq.{run_id}",
+        "provider_task_id": "not.is.null",
+    }, safe="(),.*:")
+    rows = _rest_json(
+        "analysis_run_sources",
+        query=query,
+        timeout=15,
+        worker_token=worker_token,
+    )
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row["source_key"]): str(row["provider_task_id"])
+        for row in rows
+        if isinstance(row, dict) and row.get("source_key") and row.get("provider_task_id")
+    }
+
+
 def _is_retryable_worker_error(exc: Exception) -> bool:
     if isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError)):
         return True
@@ -283,7 +305,14 @@ def process_one(worker_token: str | None = None) -> dict[str, Any]:
         run = _load_run(run_id, configured_token)
         from fieldshift.api.product import create_analysis
 
-        result = create_analysis(run["request_payload"])
+        request_payload = dict(run["request_payload"])
+        saved_task_ids = _load_provider_task_ids(run_id, configured_token)
+        if saved_task_ids:
+            # Internal-only execution metadata; it is not written back into
+            # the immutable farmer request snapshot.
+            request_payload["_provider_task_ids"] = saved_task_ids
+
+        result = create_analysis(request_payload)
         saved = _save_result(job_id, result, configured_token)
         return {
             "processed": True,
