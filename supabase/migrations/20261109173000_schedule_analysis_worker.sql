@@ -23,7 +23,7 @@ begin
                 select decrypted_secret
                 from vault.decrypted_secrets
                 where name = 'fieldshift_worker_url'
-            ) || '/api/internal/worker',
+            ) || '/api/internal/worker/tick',
             headers := jsonb_build_object(
                 'Content-Type', 'application/json',
                 'x-fieldshift-worker', (
