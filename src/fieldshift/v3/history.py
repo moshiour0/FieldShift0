@@ -157,20 +157,23 @@ def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
     _cache_write(path, payload)
     if not path.exists():
         raise NasaDataError("Archive directory is not writable")
-    _, verified = read_year(region_id, year)
-    if verified["sha256"] != payload["sha256"]:
-        raise NasaDataError("Archive write verification failed")
+    try:
+        local_payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise NasaDataError("Local archive write verification failed") from exc
+    if local_payload.get("sha256") != payload["sha256"] or _digest(local_payload.get("days", [])) != payload["sha256"]:
+        raise NasaDataError("Local archive checksum verification failed")
     if google_drive.configured():
         try:
             google_drive.put_object(
                 f"power-history/{region_id}/{year}.json",
                 path.read_bytes(),
             )
-            _, remote_verified = read_year(region_id, year)
-            if remote_verified["sha256"] != verified["sha256"]:
-                raise NasaDataError("Google Drive archive checksum verification failed")
         except Exception as exc:
             raise RuntimeError("Completed-year Google Drive archive could not be published") from exc
+    _, verified = read_year(region_id, year)
+    if verified["sha256"] != payload["sha256"]:
+        raise NasaDataError("Archive write verification failed")
     return verified
 
 
