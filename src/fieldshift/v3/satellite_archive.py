@@ -143,7 +143,11 @@ def import_satellite_csv(*, region_id: str, product: str, filepath: Path, produc
         raise RuntimeError("Serverless satellite ingestion requires Google Drive archive configuration")
     if google_drive.configured():
         try:
-            google_drive.put_object(f"satellite-raw/{raw_hash}.csv", file_bytes)
+            google_drive.put_object(
+                f"satellite-raw/{raw_hash}.csv",
+                file_bytes,
+                mime_type="text/csv",
+            )
             curated_bytes = json.dumps(output, ensure_ascii=False, sort_keys=True).encode("utf-8")
             google_drive.put_object(_key(region_id, product), curated_bytes)
             archived = google_drive.get_object(_key(region_id, product))
