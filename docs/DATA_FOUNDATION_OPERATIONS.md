@@ -30,7 +30,7 @@ The AWS role trust policy must accept GitHub's OIDC token for this exact reposit
 
 Grant the role only the actions required for this archive prefix: `s3:GetObject` and `s3:PutObject` on `arn:aws:s3:::BUCKET_NAME/power-history/*`. The workflow does not need account-wide S3 permissions. The script writes objects with server-side AES-256 encryption.
 
-The preflight job verifies the bucket and role variables and validates the requested year window before any NASA request begins. If either required variable is missing, the workflow fails with an explicit message and does not start ingestion.
+Before any NASA request starts, the preflight job validates the repository Variables, assumes the OIDC role, writes a unique marker under `power-history/_preflight/`, reads it back, and byte-compares the result. This verifies both S3 `PutObject` and `GetObject` permissions. The small marker is intentionally retained (the role does not need `DeleteObject`) and can be ignored by the history API because it is outside the `{region}/{year}.json` keys. If the bucket, OIDC trust, or S3 permissions are wrong, the workflow stops before NASA data requests begin. If either required repository Variable is missing, it also fails before ingestion.
 
 ## Run and resume
 
