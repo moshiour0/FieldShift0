@@ -25,7 +25,7 @@ returns boolean
 language sql
 security invoker
 set search_path = pg_catalog, public, private, extensions
-as $
+as $$
     select p_candidate is not null
        and length(p_candidate) >= 48
        and exists (
@@ -43,7 +43,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = pg_catalog, private
-as $
+as $$
 begin
     if auth.uid() is not null and auth.uid() <> new.user_id then
         raise exception 'Cannot enqueue another user analysis' using errcode = '42501';
@@ -74,7 +74,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, extensions
-as $
+as $$
 declare
     v_user_id uuid := auth.uid();
     v_request_hash char(64);
@@ -145,7 +145,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, private
-as $
+as $$
 declare
     v_job private.analysis_run_jobs%rowtype;
     v_run public.analysis_runs%rowtype;
@@ -236,7 +236,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, private, extensions
-as $
+as $$
 declare
     v_job private.analysis_run_jobs%rowtype;
     v_run public.analysis_runs%rowtype;
@@ -491,7 +491,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = pg_catalog, public, private
-as $
+as $$
 declare
     v_job private.analysis_run_jobs%rowtype;
     v_run public.analysis_runs%rowtype;
