@@ -26,7 +26,7 @@ The root folder is created by the one-time OAuth bootstrap script. The archive i
    - Add the Google account holding the Drive storage as a test user while setting up.
    - Request only the non-sensitive scope `https://www.googleapis.com/auth/drive.file`.
 4. Create an OAuth 2.0 Client ID of type **Desktop app**. Do not use a service account. Drive ownership and storage quota are attached to the authorized Google account.
-5. For stable unattended refresh, publish the OAuth app to **In production** before generating the final refresh token. In External / Testing mode, Google refresh tokens expire after seven days. The requested `drive.file` scope is non-sensitive; authorize only your own account.
+5. For unattended weekly refresh, set the OAuth app publishing status to **In production** before generating the final refresh token. If you leave an External app in **Testing**, Google expires the authorization (including its refresh token) after seven days, so you would have to re-authorize weekly. This is a single-owner personal integration (well under 100 users) and uses the non-sensitive `drive.file` scope; Google says personal-use apps under 100 users can operate without OAuth verification, although an unverified-app warning may appear and must be acknowledged during your own consent flow. Do not request the broad `drive` or `drive.readonly` scopes.
 6. Copy the Client ID and Client Secret.
 7. On a trusted local computer with Python 3.11+, run:
    `python scripts/google_drive_oauth.py`
