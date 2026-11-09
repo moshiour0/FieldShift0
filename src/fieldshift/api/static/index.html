@@ -404,7 +404,12 @@ async function submitAnalysis(payload,isRefresh=false){
     if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:'Analysis failed');
     if(version!==state.pollVersion)return;
     applyData(d);scheduleEvidenceRefresh(d,version);
-    if(!isRefresh){scrollToId('evidence-section');toast(d.run.status==='preliminary_ready'?'Preliminary result only; review data readiness':d.run.status==='final_with_gaps'?'Result ready with data gaps; review source coverage':'Analysis complete')}
+    if(!isRefresh){
+      scrollToId('evidence-section');
+      if(d.persistence?.saved)toast('Analysis saved to My Runs');
+      else if(state.auth.user&&d.persistence?.saved===false)toast('Analysis completed, but account save failed. Check My Runs before leaving.');
+      else toast(d.run.status==='preliminary_ready'?'Preliminary result only; review data readiness':d.run.status==='final_with_gaps'?'Result ready with data gaps; review source coverage':'Analysis complete');
+    }
   }catch(e){toast(e.message);if(isRefresh)qs('#pending-message').textContent=`${e.message} Use Check now to try again.`}
   finally{state.analysisBusy=false;qs('#refresh-evidence').disabled=Date.now()<state.retryNotBefore;clearBusy()}
 }
@@ -442,7 +447,8 @@ async function runWhatIf(scenario){
     const f=d.field,window=d.run.evidence_window||{};
     state.clientRequestId=requestBody.client_request_id;
     state.lastPayload={client_request_id:requestBody.client_request_id,field:{field_id:f.id,lat:f.location.lat,lon:f.location.lon,area_ha:f.area_ha,land_type:f.land_type,previous_crop:f.previous_crop,soil:f.soil_inputs,soil_data_source:f.soil_data_source,farmer:f.constraints},priorities:d.priorities,start_date:window.start_date,end_date:window.end_date,n_weight_samples:100,n_uncertainty_samples:32};
-    applyData(d);scheduleEvidenceRefresh(d,version);scrollToId('decision-section');toast('What-if comparison complete');
+    applyData(d);scheduleEvidenceRefresh(d,version);scrollToId('decision-section');
+    toast(d.persistence?.saved?'What-if result saved to My Runs':'What-if comparison complete');
   }catch(e){toast(e.message)}finally{state.analysisBusy=false}
 }
 
