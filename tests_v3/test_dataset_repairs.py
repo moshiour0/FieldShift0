@@ -148,6 +148,45 @@ def test_modis_sensor_bit_and_short_year_end_composite():
 
 
 
+
+def test_smap_long_date_windows_use_reusable_366_day_chunks(monkeypatch, tmp_path):
+    calls = []
+
+    def chunk(lat, lon, start, end, cache_dir):
+        calls.append((start, end))
+        expected = (end - start).days + 1
+        rows = tuple(
+            RemoteDay(date.fromordinal(start.toordinal() + offset), smap_surface_m3_m3=0.2,
+                      smap_rootzone_m3_m3=0.3, source="NASA SMAP test")
+            for offset in range(expected)
+        )
+        return gee.SMAPPointResult(
+            rows=rows, status="available", coverage_fraction=1.0,
+            retrieval_mode="google_drive_cache", archive_cache_status="verified",
+            archive_object_key=f"satellite-point-cache/chunk-{len(calls)}.json",
+            archive_sha256=(str(len(calls)) * 64),
+        )
+
+    monkeypatch.setattr(gee, "_smap_daily_point_timeseries_window", chunk)
+    start, end = date(2024, 1, 1), date(2025, 12, 31)
+    result = gee.smap_daily_point_timeseries(24.75, 90.41, start, end, tmp_path)
+
+    assert calls == [(date(2024, 1, 1), date(2024, 12, 31)),
+                     (date(2025, 1, 1), date(2025, 12, 31))]
+    assert len(result.rows) == 731
+    assert result.status == "available"
+    assert result.coverage_fraction == 1.0
+    assert result.chunk_count == 2
+    assert result.archive_cache_status == "verified"
+    assert result.archive_object_keys == (
+        "satellite-point-cache/chunk-1.json",
+        "satellite-point-cache/chunk-2.json",
+    )
+    assert result.archive_object_key is None
+    assert result.retrieval_mode == "google_drive_cache"
+
+
+
 def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
     monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
