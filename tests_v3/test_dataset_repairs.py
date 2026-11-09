@@ -178,15 +178,16 @@ def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkey
         ),
     )
     monkeypatch.setattr(pipeline, "smap_daily_point_timeseries", lambda *a, **k: smap_result)
-    monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: appeears_result)
     monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
     field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
     records = []
-    with patch.object(pipeline, "appeears_point_timeseries", wraps=pipeline.appeears_point_timeseries) as app:
-        monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: appeears_result)
-        remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
-        # Assert the production connector is asked only for the two fast products.
-        # The spy is not used here because monkeypatch has replaced the callable.
+    appeears_calls = []
+    def sampled_products(*args, **kwargs):
+        appeears_calls.append(kwargs)
+        return appeears_result
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", sampled_products)
+    remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+    assert appeears_calls and appeears_calls[0]["source_keys"] == {"hls_vi", "modis_et"}
     satellite = {row["name"]: row for row in records}
     assert satellite["NASA SMAP"]["status"] == "available"
     assert satellite["NASA SMAP"]["retrieval_mode"] == "google_earth_engine"
@@ -214,11 +215,16 @@ def test_pipeline_falls_back_to_appeears_when_gee_smap_is_unavailable(monkeypatc
             {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
         ),
     )
-    monkeypatch.setattr(pipeline, "appeears_point_timeseries", lambda *a, **k: app_result)
+    appeears_calls = []
+    def fallback_products(*args, **kwargs):
+        appeears_calls.append(kwargs)
+        return app_result
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", fallback_products)
     monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
     field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
     records = []
     remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+    assert appeears_calls and appeears_calls[0]["source_keys"] is None
     assert [row for row in records if row["name"] == "NASA SMAP"][0]["status"] == "available"
     assert any(row.smap_surface_m3_m3 == pytest.approx(0.2) for row in remote)
 
