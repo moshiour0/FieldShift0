@@ -143,7 +143,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 <div class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,currentQueuedRunId:null,workerPollTimer:null,workerPollAttempts:0,auth:{config:null,session:null,user:null,loading:true}};
+const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,currentQueuedRunId:null,workerPollTimer:null,workerPollAttempts:0,workerRecheckAvailable:false,auth:{config:null,session:null,user:null,loading:true}};
 const qs=s=>document.querySelector(s); const qsa=s=>Array.from(document.querySelectorAll(s));
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>`${Math.round(Math.max(0,Math.min(1,Number(v)||0))*100)}%`;
@@ -219,6 +219,7 @@ function hideResultPanelsUntilReady(){
 }
 function showQueuedRun(run,message){
   const safeRun=run||{};
+  state.workerRecheckAvailable=false;
   renderRunReadiness({run:{status:safeRun.status||'queued',status_message:message||safeRun.status_message||'Your saved analysis is waiting for the background worker.'}});
   qs('#pending-evidence').classList.remove('hidden');
   qs('#pending-message').textContent=message||safeRun.status_message||'Queued safely. You can close this page; the server will continue checking datasets.';
@@ -229,12 +230,23 @@ function showWorkerPending(detail){
   const pending=sources.filter(s=>['queued','pending','retrying','partial'].includes(String(s.status||'').toLowerCase()));
   const names=pending.map(s=>s.source_name).filter(Boolean);
   const message=run.stage==='retry_exhausted'
-    ? 'Automatic checks reached their retry limit. This run remains saved as WAITING FOR DATA; reopen it later to request another check.'
+    ? 'Automatic checks reached their retry limit. This run remains saved as WAITING FOR DATA; you can request another background check.'
     : names.length ? 'Background checks continue for: '+names.join(', ')+'. You may close this page.'
     : run.status_message||'Background processing continues. You may close this page.';
-  if(run.stage==='retry_exhausted'||['failed','cancelled'].includes(run.status)||Boolean(run.completed_at)){
+  const canRecheck = Boolean(run.id && state.auth.user && (
+    run.stage==='retry_exhausted' || ['failed','final_with_gaps'].includes(run.status)
+  ));
+  state.workerRecheckAvailable=canRecheck;
+  if(canRecheck){
     qs('#pending-evidence').classList.add('hidden');
-    qs('#refresh-evidence').classList.remove('hidden');qs('#stop-refresh').classList.remove('hidden');
+    qs('#refresh-evidence').classList.remove('hidden');
+    qs('#refresh-evidence').disabled=false;
+    qs('#refresh-evidence').textContent='Check again';
+    qs('#stop-refresh').classList.add('hidden');
+  }else if(['failed','cancelled'].includes(run.status)||Boolean(run.completed_at)){
+    qs('#pending-evidence').classList.add('hidden');
+    qs('#refresh-evidence').classList.add('hidden');
+    qs('#stop-refresh').classList.add('hidden');
   }else{
     qs('#pending-evidence').classList.remove('hidden');qs('#pending-message').textContent=message;
     qs('#refresh-evidence').classList.add('hidden');qs('#stop-refresh').classList.add('hidden');
@@ -489,7 +501,30 @@ async function runAnalysis(){
   }catch(e){toast(e.message)}
 }
 async function refreshPendingEvidence(){
-  if(!state.lastPayload||state.analysisBusy)return;
+  if(state.analysisBusy)return;
+  if(state.workerRecheckAvailable && state.currentQueuedRunId){
+    state.analysisBusy=true;
+    showBusy('Re-queueing saved evidence check…');
+    qs('#refresh-evidence').disabled=true;
+    try{
+      const runId=state.currentQueuedRunId;
+      const result=await accountApi('/api/account/runs/'+encodeURIComponent(runId)+'/recheck',{method:'POST'});
+      state.workerRecheckAvailable=false;
+      state.workerPollAttempts=0;
+      showQueuedRun(result.run,result.run.status_message);
+      scrollToId('evidence-section');
+      toast(result.already_queued?'Evidence check is already queued':'Saved analysis queued for another evidence check');
+      pollQueuedRun(runId,state.pollVersion,0);
+    }catch(e){
+      toast(e.message);
+      qs('#refresh-evidence').disabled=false;
+      qs('#refresh-evidence').textContent='Check again';
+    }finally{
+      state.analysisBusy=false;clearBusy();
+    }
+    return;
+  }
+  if(!state.lastPayload)return;
   const remaining=Math.ceil((state.retryNotBefore-Date.now())/1000);
   if(remaining>0){toast(`Please wait ${remaining} seconds before checking NASA again.`);return}
   clearTimeout(state.pendingTimer);state.pendingAttempts++;
