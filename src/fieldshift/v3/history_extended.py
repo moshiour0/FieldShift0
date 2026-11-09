@@ -13,6 +13,7 @@ from typing import Any
 from .history import _monthly_archive_year, archive_dir, read_year, region_by_id, validate_days
 from .models import Provenance, WeatherDay
 from .nasa import _cache_write, power_daily
+from . import google_drive
 
 POWER_CITATION="https://power.larc.nasa.gov/docs/services/api/temporal/daily/"
 
@@ -27,16 +28,18 @@ def _ytd_path(region_id:str,year:int)->Path:
 def read_ytd(region_id:str,year:int)->tuple[tuple[WeatherDay,...],dict]:
     path=_ytd_path(region_id,year)
     payload=None
-    bucket=os.getenv("FIELD_SHIFT_ARCHIVE_S3_BUCKET","").strip()
-    if bucket:
+    if google_drive.configured():
         try:
-            import boto3
-            obj=boto3.client("s3").get_object(Bucket=bucket,Key=f"power-history/{region_id}/{year}-ytd.json")
-            payload=json.loads(obj["Body"].read())
-        except Exception as exc:
-            if getattr(exc,"response",{}).get("Error",{}).get("Code","") not in {"NoSuchKey","404"}:
-                raise RuntimeError("Persistent YTD archive could not be loaded") from exc
-    if payload is None: payload=json.loads(path.read_text(encoding="utf-8"))
+            archived=google_drive.get_object(f"power-history/{region_id}/{year}-ytd.json")
+        except google_drive.GoogleDriveError as exc:
+            raise RuntimeError("Google Drive YTD archive unavailable") from exc
+        if archived is not None:
+            try:
+                payload=json.loads(archived.decode("utf-8"))
+            except (UnicodeDecodeError,json.JSONDecodeError) as exc:
+                raise ValueError("Google Drive YTD object is not valid JSON") from exc
+    if payload is None:
+        payload=json.loads(path.read_text(encoding="utf-8"))
     through=date.fromisoformat(payload["data_through"])
     rows=payload.get("days",[])
     if payload.get("schema_version")!=2 or payload.get("region")!=region_by_id(region_id) or payload.get("year")!=year or payload.get("is_partial") is not True or through.year!=year or through>date.today() or _digest(rows)!=payload.get("sha256"):
@@ -61,16 +64,22 @@ def prefetch_ytd(region_id:str,through:date,*,refresh:bool=False,progress=None)-
     validate_days(days,start,through)
     rows=json.loads(json.dumps([asdict(d) for d in days],default=str))
     payload={"schema_version":2,"region":region,"year":through.year,"is_partial":True,"source":"NASA POWER Daily","product_id":"POWER daily meteorology","native_resolution":"NASA POWER gridded point, daily","data_through":through.isoformat(),"retrieved_at":datetime.now(UTC).isoformat(),"quality_status":"qa_passed_with_imputation" if any("imputed" in d.source for d in days) else "qa_passed","coverage_fraction":1.0,"fallback_used":any("imputed" in d.source for d in days),"archive_kind":"point_not_zone","citation":POWER_CITATION,"sha256":_digest(rows),"days":rows}
-    bucket=os.getenv("FIELD_SHIFT_ARCHIVE_S3_BUCKET","").strip()
-    if os.getenv("VERCEL") and not bucket: raise RuntimeError("YTD archive publishing requires durable object storage")
+    if os.getenv("VERCEL") and not google_drive.configured():
+        raise RuntimeError("YTD archive publishing requires Google Drive storage configuration")
     if progress: progress("publishing")
     _cache_write(path,payload)
-    if bucket:
+    if google_drive.configured():
         try:
-            import boto3
-            boto3.client("s3").put_object(Bucket=bucket,Key=f"power-history/{region_id}/{through.year}-ytd.json",Body=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode(),ContentType="application/json",ServerSideEncryption="AES256")
-        except Exception as exc: raise RuntimeError("Durable YTD archive publishing failed") from exc
+            archive_bytes=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode("utf-8")
+            google_drive.put_object(
+                f"power-history/{region_id}/{through.year}-ytd.json",
+                archive_bytes,
+            )
+        except Exception as exc:
+            raise RuntimeError("Persistent Google Drive YTD archive publishing failed") from exc
     _,verified=read_ytd(region_id,through.year)
+    if verified.get("sha256") != payload["sha256"]:
+        raise RuntimeError("Google Drive YTD archive checksum verification failed")
     return verified
 
 def _day(value:str|date)->date:
