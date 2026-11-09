@@ -52,6 +52,40 @@ class TestSupabaseAuth(unittest.TestCase):
             "Bearer user-access-token",
         )
 
+    @patch.object(supabase_auth, "_request_json")
+    def test_request_analysis_run_recheck_uses_owner_access_token(self, request_json) -> None:
+        run_id = "628a9906-127d-46c7-af5b-b0e979e2ac42"
+        request_json.return_value = {
+            "run_id": run_id,
+            "status": "waiting_for_data",
+            "stage": "queued",
+            "already_queued": False,
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            },
+        ):
+            result = supabase_auth.request_analysis_run_recheck(
+                access_token="owner-access-token",
+                run_id=run_id,
+            )
+
+        self.assertEqual(result["run_id"], run_id)
+        request_json.assert_called_once()
+        self.assertEqual(
+            request_json.call_args.args[0],
+            "https://example.supabase.co/rest/v1/rpc/request_analysis_run_recheck",
+        )
+        self.assertEqual(request_json.call_args.kwargs["method"], "POST")
+        self.assertEqual(
+            request_json.call_args.kwargs["headers"]["Authorization"],
+            "Bearer owner-access-token",
+        )
+        self.assertEqual(request_json.call_args.kwargs["payload"], {"p_run_id": run_id})
+
     @patch.object(supabase_auth, "save_completed_analysis")
     def test_persistence_builds_hashes_and_maps_source_statuses(self, save) -> None:
         save.return_value = {
