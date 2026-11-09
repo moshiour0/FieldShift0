@@ -443,7 +443,7 @@ function setDatePreset(){
 function stopEvidenceRefresh(){
   clearTimeout(state.pendingTimer);state.pendingTimer=null;
   clearTimeout(state.workerPollTimer);state.workerPollTimer=null;
-  state.currentQueuedRunId=null;state.workerPollAttempts=0;state.pollVersion++;
+  state.currentQueuedRunId=null;state.workerPollAttempts=0;state.workerRecheckAvailable=false;state.pollVersion++;
   if(!qs('#pending-evidence').classList.contains('hidden'))qs('#pending-message').textContent='Browser checks stopped. Any accepted background run continues on the server.';
 }
 function scheduleEvidenceRefresh(data,version){
