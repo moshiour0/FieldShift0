@@ -267,7 +267,7 @@ def _upload(
     parent_id: str,
     name: str,
     content: bytes,
-    mime_type: str,
+    mime_type: str = "application/json",
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {"name": name, "mimeType": mime_type}
     if file_id is None:
@@ -360,7 +360,13 @@ def verify_storage() -> dict[str, str]:
         raise GoogleDriveError("Could not create Google Drive preflight folder")
     item_id: str | None = None
     try:
-        created = _upload(file_id=None, parent_id=parent_id, name=parts[-1], content=marker)
+        created = _upload(
+            file_id=None,
+            parent_id=parent_id,
+            name=parts[-1],
+            content=marker,
+            mime_type="text/plain",
+        )
         item_id = str(created["id"])
         raw, _ = _auth_request(
             "GET",
