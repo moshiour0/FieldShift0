@@ -297,6 +297,8 @@ def _load_optional_remote(
                     "retry_after_seconds": smap_result.retry_after_seconds,
                     "archive_cache_status": smap_result.archive_cache_status,
                     "archive_object_key": smap_result.archive_object_key,
+                    "archive_object_keys": list(smap_result.archive_object_keys),
+                    "archive_chunk_count": smap_result.chunk_count,
                     "archive_sha256": smap_result.archive_sha256,
                     "citation": "https://doi.org/10.5067/T5RUATAQREF8",
                     "provenance": asdict(smap_provenance) if smap_provenance else None,
