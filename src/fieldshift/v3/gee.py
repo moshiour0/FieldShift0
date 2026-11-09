@@ -187,7 +187,7 @@ def _smap_shared_cache_write(
                 "source": row.source,
                 "provenance": asdict(row.provenance) if row.provenance else None,
             }
-            for row in smap_rows
+            for row in rows
         ],
         "meta": meta,
     }
