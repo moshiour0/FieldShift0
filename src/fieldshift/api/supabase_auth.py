@@ -5,6 +5,7 @@ the caller's access token, so Supabase Auth and RLS remain the authorization sou
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -392,7 +393,6 @@ def save_worker_analysis(
         worker_secret=worker_secret,
         payload={
             "p_job_id": job_id,
-            "p_run_id": run_id,
             "p_run": run_record,
             "p_sources": sources,
             "p_result": result_record,
