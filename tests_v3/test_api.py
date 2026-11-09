@@ -39,6 +39,58 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"runs": []})
         self.assertEqual(rest_select.call_args.kwargs["filters"]["user_id"], f"eq.{user_id}")
 
+    def test_saved_run_recheck_requires_a_supabase_session(self):
+        c = TestClient(app)
+        response = c.post("/api/account/runs/628a9906-127d-46c7-af5b-b0e979e2ac42/recheck")
+        self.assertEqual(response.status_code, 401)
+
+    def test_saved_run_recheck_uses_the_verified_owner_session(self):
+        c = TestClient(app)
+        user_id = "2b8e3e0d-7b39-4f73-83b9-90ee5d979fca"
+        run_id = "628a9906-127d-46c7-af5b-b0e979e2ac42"
+        result = {
+            "run_id": run_id,
+            "status": "waiting_for_data",
+            "stage": "queued",
+            "job_status": "queued",
+            "already_queued": False,
+            "available_at": "2026-11-09T10:00:00+00:00",
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            },
+        ), patch(
+            "fieldshift.api.app.supabase_auth.get_user",
+            return_value={"id": user_id},
+        ), patch(
+            "fieldshift.api.app.supabase_auth.request_analysis_run_recheck",
+            return_value=result,
+        ) as recheck:
+            response = c.post(
+                f"/api/account/runs/{run_id}/recheck",
+                headers={"Authorization": "Bearer owner-access-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["queued"])
+        self.assertFalse(response.json()["already_queued"])
+        self.assertEqual(response.json()["run"]["id"], run_id)
+        self.assertEqual(recheck.call_args.kwargs["access_token"], "owner-access-token")
+        self.assertEqual(recheck.call_args.kwargs["run_id"], run_id)
+
+    def test_saved_run_recheck_rejects_invalid_run_id_before_rpc(self):
+        c = TestClient(app)
+        with patch("fieldshift.api.app.supabase_auth.request_analysis_run_recheck") as recheck:
+            response = c.post(
+                "/api/account/runs/not-a-uuid/recheck",
+                headers={"Authorization": "Bearer token"},
+            )
+        self.assertEqual(response.status_code, 404)
+        recheck.assert_not_called()
+
     def test_analysis_queue_requires_sign_in(self):
         c = TestClient(app)
         response = c.post("/api/analysis/queue", json={"client_request_id": "not-a-uuid"})
