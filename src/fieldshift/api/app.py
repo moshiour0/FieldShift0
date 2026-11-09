@@ -126,6 +126,8 @@ def auth_me(request: Request) -> dict[str, Any]:
 @app.get("/api/account/runs")
 def account_runs(request: Request) -> dict[str, Any]:
     token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
     try:
         rows = supabase_auth.rest_select(
             "analysis_runs",
@@ -152,6 +154,8 @@ def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
     except (ValueError, TypeError, AttributeError) as exc:
         raise HTTPException(status_code=404, detail="Saved analysis not found.") from exc
     token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
     try:
         run_rows = supabase_auth.rest_select(
             "analysis_runs",
@@ -328,17 +332,15 @@ def field_preview(payload: dict[str, Any]) -> dict[str, Any]:
 def analysis_run(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         body = payload or {}
-        if request is not None:
-            token = supabase_auth.bearer_token(request.headers.get("authorization"))
-            if token:
-                try:
-                    supabase_auth.get_user(token)
-                except supabase_auth.SupabaseAPIError as exc:
-                    status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
-                    raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        token = supabase_auth.bearer_token(request.headers.get("authorization"))
+        if token:
+            try:
+                supabase_auth.get_user(token)
+            except supabase_auth.SupabaseAPIError as exc:
+                status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
         response = create_analysis(body)
-        if request is not None:
-            _persist_authenticated_response(request, body, response)
+        _persist_authenticated_response(request, body, response)
         return response
     except HTTPException:
         raise
