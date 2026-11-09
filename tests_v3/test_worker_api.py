@@ -15,7 +15,7 @@ class TestDurableWorkerAPI(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_worker_endpoint_rejects_missing_or_wrong_token(self) -> None:
-        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests"}), patch(
+        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"}), patch(
             "fieldshift.api.app.process_analysis_worker_one"
         ) as process:
             missing = self.client.post("/api/internal/worker")
@@ -28,13 +28,13 @@ class TestDurableWorkerAPI(unittest.TestCase):
         process.assert_not_called()
 
     def test_worker_returns_idle_when_no_job_is_available(self) -> None:
-        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests"}), patch(
+        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"}), patch(
             "fieldshift.api.app.process_analysis_worker_one",
             return_value={"processed": False, "message": "No queued analysis job is ready."},
         ) as process:
             response = self.client.post(
                 "/api/internal/worker",
-                headers={"x-fieldshift-worker": "worker-secret-for-tests"},
+                headers={"x-fieldshift-worker": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"},
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"processed": False, "message": "No queued analysis job is ready."})
@@ -49,26 +49,26 @@ class TestDurableWorkerAPI(unittest.TestCase):
             "job_status": "retrying",
             "next_retry_at": "2026-11-09T11:00:00+00:00",
         }
-        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests"}), patch(
+        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"}), patch(
             "fieldshift.api.app.process_analysis_worker_one",
             return_value=expected,
         ) as process:
             response = self.client.post(
                 "/api/internal/worker",
-                headers={"x-fieldshift-worker": "worker-secret-for-tests"},
+                headers={"x-fieldshift-worker": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"},
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), expected)
         process.assert_called_once_with()
 
     def test_worker_translates_safe_processing_errors_to_503(self) -> None:
-        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests"}), patch(
+        with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"}), patch(
             "fieldshift.api.app.process_analysis_worker_one",
             side_effect=WorkerAPIError("The analysis worker could not complete this job."),
         ) as process:
             response = self.client.post(
                 "/api/internal/worker",
-                headers={"x-fieldshift-worker": "worker-secret-for-tests"},
+                headers={"x-fieldshift-worker": "worker-secret-for-tests-worker-secret-for-tests-worker-secret-for-tests"},
             )
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["detail"], "The analysis worker could not complete this job.")
