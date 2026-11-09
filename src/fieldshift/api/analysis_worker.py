@@ -6,6 +6,7 @@ persists a versioned result through the RLS-protected worker RPC.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -182,16 +183,33 @@ def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict
     if not isinstance(items, list):
         raise WorkerAPIError("The engine returned invalid evidence metadata.")
 
-    status = str(run.get("status") or "preliminary_ready")
+    engine_status = str(run.get("status") or "preliminary_ready")
     retry_seconds = _retry_after_seconds(items)
     retry_at = (
         (datetime.now(UTC) + timedelta(seconds=retry_seconds)).isoformat()
         if retry_seconds is not None else None
     )
+    # Never label a result FINAL while a provider has a scheduled retry.
+    # Keep the current evidence snapshot, but expose it as waiting_for_data.
+    status = (
+        "waiting_for_data"
+        if retry_at is not None and engine_status in {"final_ready", "final_with_gaps"}
+        else engine_status
+    )
+    is_final = status in {"final_ready", "final_with_gaps"}
+    status_message = str(run.get("status_message") or "Background analysis completed.")
+    if status == "waiting_for_data" and engine_status in {"final_ready", "final_with_gaps"}:
+        status_message = "A preliminary evidence snapshot is available. Some provider data is still pending and will be checked again automatically."
+
+    result_payload = copy.deepcopy(result)
+    stored_run = result_payload.setdefault("run", {})
+    stored_run["status"] = status
+    stored_run["is_final"] = is_final
+    stored_run["status_message"] = status_message
+
     fingerprint = hashlib.sha256(
         json.dumps(items, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
     ).hexdigest()
-    is_final = status in {"final_ready", "final_with_gaps"}
     result_kind = "final" if status == "final_ready" else "final_with_gaps" if status == "final_with_gaps" else "preliminary"
 
     payload = {
@@ -200,13 +218,13 @@ def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict
         "p_run": {
             "status": status,
             "progress_percent": 100 if is_final else 75,
-            "status_message": run.get("status_message") or "Background analysis completed.",
+            "status_message": status_message,
         },
         "p_sources": _source_records(items),
         "p_result": {
             "result_kind": result_kind,
             "evidence_fingerprint": fingerprint,
-            "result_payload": {key: value for key, value in result.items() if key != "_request_payload"},
+            "result_payload": {key: value for key, value in result_payload.items() if key != "_request_payload"},
         },
         "p_retry_at": retry_at,
     }
