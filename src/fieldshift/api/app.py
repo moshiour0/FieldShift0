@@ -230,7 +230,15 @@ def integration_status() -> dict[str, Any]:
             "connection_tested": False,
             "private": True,
         },
-        "analysis_state": {"storage": "process_memory", "durable_across_instances": False},
+        "account_storage": {
+            "configured": bool(supabase_auth.settings()["configured"]),
+            "auth_provider": "email_magic_link",
+            "saved_runs": "supabase_postgres",
+        },
+        "analysis_state": {
+            "storage": "process_memory_for_guest_runs_and_supabase_for_signed_in_completed_runs",
+            "durable_across_instances": bool(supabase_auth.settings()["configured"]),
+        },
     }
 
 
@@ -317,7 +325,7 @@ def field_preview(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/api/analysis/run")
-def analysis_run(payload: dict[str, Any] | None = None, request: Request = None) -> dict[str, Any]:
+def analysis_run(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         body = payload or {}
         if request is not None:
