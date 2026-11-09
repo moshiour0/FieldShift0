@@ -15,7 +15,7 @@ This file is the continuity document for the implementation. A new assistant/ses
 
 - Pre-implementation baseline branch head: a5e27f48073c52891b994849aa03a13f33d2c025.
 - First implementation commit: d2d3d0f8fef6c4ecb1ef1e5041c5e3fd4b4ca19a.
-- Current branch head for this handoff update: pending the compatibility-test follow-up commit.
+- Latest implementation branch head at last verified CI: 4b067fb0cef01eb034f9c2a91482c0d5cece7011.
 - PR #1: https://github.com/moshiour0/FieldShift0/pull/1
 - PR state at last check: open=true, draft=true, merged=false.
 - Latest completed strict Drive verification run: #2, run ID 42576819439.
@@ -26,7 +26,7 @@ This file is the continuity document for the implementation. A new assistant/ses
 - Each region reported year 2025, 365 daily records, retrieval_mode=google_drive, drive_readback_verified=true, and quality=NASA POWER (live).
 - The Drive verification now does a direct remote read-back and byte-for-byte comparison. Do not regress to local-cache fallback verification.
 - Earlier CI on this same SHA passed Python 3.11 and 3.12: 121 tests passed on each, Ruff passed, mypy passed, compileall passed. There was one non-blocking existing warning.
-- Vercel Preview for the branch was READY at https://field-shift0-qld6tcfc1.vercel.app. The production alias is https://field-shift0.vercel.app. Do not assume Preview is Production.
+- Vercel Preview for the pre-implementation branch was READY at https://field-shift0-qld6tcfc1.vercel.app. Preview for the latest verified implementation commit 4b067fb0cef01eb034f9c2a91482c0d5cece7011 was READY at https://field-shift0-73l6w90yr.vercel.app. The production alias is https://field-shift0.vercel.app. Do not assume Preview is Production.
 
 ### User's requested outcome
 
@@ -226,11 +226,14 @@ Commit d2d3d0f8fef6c4ecb1ef1e5041c5e3fd4b4ca19a added:
 - product.py now returns status_message, is_final, prediction_eligible, core_data_ready, pending_sources, gap_sources, and missing_required_sources.
 - index.html now renders a run-readiness banner in the evidence section.
 
-CI follow-up:
-- Run #186 / 42579715675 initially failed because tests/test_learning_lab_contract.py still expected only the legacy values complete/pending.
-- The pytest run reported 126 passed, 1 failed. The failure is the stale assertion in the learning-lab contract test, not a lifecycle-classifier failure.
-- The assertion is being updated to the new contract: when live NASA is explicitly disabled and required POWER weather is not ready, the run must be preliminary_ready, is_final=false, and prediction_eligible=false.
-- Re-run both Python 3.11 and 3.12, Ruff, mypy, and compileall after the compatibility-test change.
+CI follow-up and final verification:
+- Run #186 / 42579715675 initially failed because tests/test_learning_lab_contract.py still expected only the legacy values complete/pending. It reported 126 passed, 1 failed.
+- The test was updated to the new contract: when live NASA is explicitly disabled and required POWER weather is not ready, the run must be preliminary_ready, is_final=false, and prediction_eligible=false.
+- The next run exposed a mypy variable-reuse issue in run_lifecycle.py. It was fixed in commit 4b067fb0cef01eb034f9c2a91482c0d5cece7011 by separating is_required from required_items.
+- Final verified CI on commit 4b067fb0cef01eb034f9c2a91482c0d5cece7011: push run 42580071172 and PR run 42580077962 both succeeded.
+- Python 3.11: 127 passed, 1 warning; compileall passed; Ruff passed; mypy reported no issues in 32 source files.
+- Python 3.12: 127 passed, 1 warning; compileall passed; Ruff passed; mypy reported no issues in 32 source files.
+- The remaining warning is the existing Starlette TestClient/httpx deprecation warning. Do not describe the suite as warning-free.
 
 Infrastructure verification:
 - Vercel Preview for commit d2d3d0f8fef6c4ecb1ef1e5041c5e3fd4b4ca19a reached READY at https://field-shift0-qugdka886.vercel.app.
