@@ -50,6 +50,24 @@ class TestRunLifecycle(unittest.TestCase):
         self.assertTrue(result["is_final"])
         self.assertEqual(result["gap_sources"], [])
 
+    def test_missing_core_without_result_waits_for_data(self) -> None:
+        result = classify_run_readiness(
+            [{"name": "NASA POWER Daily weather", "status": "pending"}],
+            result_available=False,
+        )
+        self.assertEqual(result["status"], "waiting_for_data")
+        self.assertFalse(result["is_final"])
+        self.assertFalse(result["prediction_eligible"])
+
+    def test_ready_evidence_without_computed_result_stays_running(self) -> None:
+        result = classify_run_readiness(
+            [{"name": "NASA POWER Daily weather", "status": "available"}],
+            result_available=False,
+        )
+        self.assertEqual(result["status"], "running")
+        self.assertFalse(result["is_final"])
+        self.assertFalse(result["prediction_eligible"])
+
     def test_unknown_source_state_is_not_silently_accepted(self) -> None:
         result = classify_run_readiness([
             {"name": "NASA POWER Daily weather", "status": "available"},
