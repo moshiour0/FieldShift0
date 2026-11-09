@@ -168,7 +168,6 @@ def _save_result(job_id: str, result: dict[str, Any]) -> dict[str, Any]:
         (datetime.now(UTC) + timedelta(seconds=retry_seconds)).isoformat()
         if retry_seconds is not None else None
     )
-    request_payload = result.get("_request_payload") or {}
     fingerprint = hashlib.sha256(
         json.dumps(items, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
     ).hexdigest()
