@@ -27,7 +27,16 @@ def main() -> int:
         for year in range(args.start_year, args.end_year + 1):
             try:
                 meta = prefetch_year(region, year, refresh=args.refresh)
-                item = {"region": region, "year": year, "status": "available", "sha256": meta["sha256"]}
+                item = {
+                    "region": region,
+                    "year": year,
+                    "status": "available",
+                    "daily_records": meta.get("daily_records"),
+                    "sha256": meta["sha256"],
+                    "quality": meta.get("quality"),
+                    "retrieval_mode": meta.get("retrieval_mode"),
+                    "drive_readback_verified": meta.get("drive_readback_verified", False),
+                }
             except Exception as exc:
                 item = {"region": region, "year": year, "status": "failed", "error_type": type(exc).__name__}
             results.append(item)
