@@ -20,10 +20,14 @@ class WorkerAPIError(RuntimeError):
     """A safe, non-secret worker/Data API failure."""
 
 
-def _settings() -> tuple[str, str, str]:
+def _settings(worker_token_override: str | None = None) -> tuple[str, str, str]:
     base_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
-    worker_token = os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
+    worker_token = (
+        worker_token_override
+        or os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
+        or os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip()
+    )
     if not base_url or not publishable_key or len(worker_token) < 48:
         raise WorkerAPIError("The scheduled analysis worker is not configured.")
     return base_url, publishable_key, worker_token
@@ -36,8 +40,9 @@ def _rest_json(
     payload: dict[str, Any] | None = None,
     query: str | None = None,
     timeout: int = 20,
+    worker_token: str | None = None,
 ) -> Any:
-    base_url, publishable_key, worker_token = _settings()
+    base_url, publishable_key, worker_token = _settings(worker_token)
     url = f"{base_url}/rest/v1/{path.lstrip('/')}"
     if query:
         url = f"{url}?{query}"
@@ -131,23 +136,24 @@ def _source_records(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return records
 
 
-def _claim_job() -> dict[str, Any] | None:
+def _claim_job(worker_token: str) -> dict[str, Any] | None:
     result = _rest_json(
         "rpc/claim_analysis_run_job",
         method="POST",
-        payload={"p_worker_token": _settings()[2]},
+        payload={"p_worker_token": worker_token},
         timeout=25,
+        worker_token=worker_token,
     )
     return result if isinstance(result, dict) and result.get("id") else None
 
 
-def _load_run(run_id: str) -> dict[str, Any]:
+def _load_run(run_id: str, worker_token: str) -> dict[str, Any]:
     query = urllib.parse.urlencode({
         "select": "id,user_id,client_request_id,request_payload,requested_start,requested_end,status",
         "id": f"eq.{run_id}",
         "limit": "1",
     }, safe="(),.*:")
-    result = _rest_json("analysis_runs", query=query, timeout=20)
+    result = _rest_json("analysis_runs", query=query, timeout=20, worker_token=worker_token)
     if not isinstance(result, list) or not result:
         raise WorkerAPIError("The leased analysis run could not be loaded.")
     row = result[0]
@@ -156,7 +162,7 @@ def _load_run(run_id: str) -> dict[str, Any]:
     return row
 
 
-def _save_result(job_id: str, result: dict[str, Any]) -> dict[str, Any]:
+def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict[str, Any]:
     run = result.get("run") or {}
     items = (result.get("evidence") or {}).get("items") or []
     if not isinstance(items, list):
@@ -175,7 +181,7 @@ def _save_result(job_id: str, result: dict[str, Any]) -> dict[str, Any]:
     result_kind = "final" if status == "final_ready" else "final_with_gaps" if status == "final_with_gaps" else "preliminary"
 
     payload = {
-        "p_worker_token": _settings()[2],
+        "p_worker_token": worker_token,
         "p_job_id": job_id,
         "p_run": {
             "status": status,
@@ -190,13 +196,13 @@ def _save_result(job_id: str, result: dict[str, Any]) -> dict[str, Any]:
         },
         "p_retry_at": retry_at,
     }
-    saved = _rest_json("rpc/worker_save_analysis", method="POST", payload=payload, timeout=30)
+    saved = _rest_json("rpc/worker_save_analysis", method="POST", payload=payload, timeout=30, worker_token=worker_token)
     if not isinstance(saved, dict) or not saved.get("run_id"):
         raise WorkerAPIError("Supabase did not confirm the worker result.")
     return saved
 
 
-def _fail_job(job_id: str, attempts: int, error_code: str) -> None:
+def _fail_job(job_id: str, attempts: int, error_code: str, worker_token: str) -> None:
     # The SQL function enforces max_attempts and validates the active lease.
     delay = min(21600, 900 * (2 ** max(0, attempts - 1)))
     retry_at = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
@@ -205,32 +211,34 @@ def _fail_job(job_id: str, attempts: int, error_code: str) -> None:
             "rpc/worker_fail_analysis_job",
             method="POST",
             payload={
-                "p_worker_token": _settings()[2],
+                "p_worker_token": worker_token,
                 "p_job_id": job_id,
                 "p_error_code": error_code[:80],
                 "p_retry_at": retry_at,
             },
             timeout=20,
+            worker_token=worker_token,
         )
     except WorkerAPIError:
         # A lost lease is recovered by the database after lease_expires_at.
         return
 
 
-def process_one() -> dict[str, Any]:
+def process_one(worker_token: str | None = None) -> dict[str, Any]:
     """Claim and process at most one job; safe to call from a scheduled HTTP route."""
-    job = _claim_job()
+    configured_token = _settings(worker_token)[2]
+    job = _claim_job(configured_token)
     if job is None:
         return {"processed": False, "message": "No queued analysis job is ready."}
 
     job_id = str(job["id"])
     run_id = str(job["run_id"])
     try:
-        run = _load_run(run_id)
+        run = _load_run(run_id, configured_token)
         from fieldshift.api.product import create_analysis
 
         result = create_analysis(run["request_payload"])
-        saved = _save_result(job_id, result)
+        saved = _save_result(job_id, result, configured_token)
         return {
             "processed": True,
             "run_id": run_id,
@@ -240,5 +248,5 @@ def process_one() -> dict[str, Any]:
             "next_retry_at": saved.get("next_retry_at"),
         }
     except Exception as exc:
-        _fail_job(job_id, int(job.get("attempts") or 1), type(exc).__name__)
+        _fail_job(job_id, int(job.get("attempts") or 1), type(exc).__name__, configured_token)
         raise WorkerAPIError("The analysis worker could not complete this job; the lease will retry it safely.") from exc
