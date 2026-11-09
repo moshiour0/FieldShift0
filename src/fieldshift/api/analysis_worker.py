@@ -145,7 +145,8 @@ def _source_records(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 key: item[key] for key in (
                     "retrieval_mode", "citation", "temporal_resolution",
                     "spatial_resolution", "data_start_date", "data_end_date",
-                    "archive_cache_status", "archive_object_key", "archive_sha256",
+                    "archive_cache_status", "archive_object_key", "archive_object_keys",
+                    "archive_chunk_count", "archive_sha256",
                 ) if item.get(key) is not None
             },
         })
