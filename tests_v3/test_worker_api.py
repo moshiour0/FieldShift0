@@ -60,7 +60,7 @@ class TestDurableWorkerAPI(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, **expected})
-        process.assert_called_once_with()
+        process.assert_called_once_with("worker-secret-for-tests")
 
     def test_worker_translates_safe_processing_errors_to_503(self) -> None:
         with patch.dict(os.environ, {"FIELDSHIFT_WORKER_TOKEN": "worker-secret-for-tests"}), patch(
@@ -73,7 +73,7 @@ class TestDurableWorkerAPI(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["detail"], "The analysis worker could not complete this job.")
-        process.assert_called_once_with()
+        process.assert_called_once_with("worker-secret-for-tests")
 
 
 if __name__ == "__main__":
