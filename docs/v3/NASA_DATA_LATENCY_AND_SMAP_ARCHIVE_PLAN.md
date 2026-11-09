@@ -364,6 +364,63 @@ This confirms the technical request shape for an area-archive pilot. It does **n
 
 ---
 
+## 7.6 Implementation update — 2026-11-09 (after SMAP cache/retry and DB lifecycle work)
+
+### Code now present on this Draft PR branch
+
+- SMAP uses `NASA/SMAP/SPL4SMGP/008` through Google Earth Engine at the selected map coordinate when GEE is configured. AppEEARS remains the exact-location fallback when GEE cannot be used.
+- Daily SMAP records are accepted only when both `sm_surface` and `sm_rootzone` independently have all eight 3-hourly observations. No missing interval or day is interpolated.
+- The GEE path has an exact coordinate + product + QA version + date-chunk key. Completed records are written to private Google Drive with canonical payload SHA-256 and byte-for-byte remote read-back verification.
+- SMAP cache chunks are now stable **calendar-year chunks**, not request-relative 365-day ranges. A request for (for example) 2024-03-01 through 2025-06-30 reads the 2024 and 2025 year objects, then returns only the requested inclusive dates. This enables reuse when a user changes the date window but retains the same exact field coordinate.
+- Multi-year SMAP windows are bounded into one calendar-year query per year, with each year object cached independently. A failed year must not invalidate already-verified year objects.
+- AppEEARS point results for HLS and MODIS remain live-first and are stored in the shared Drive exact-result cache after QA. If GEE SMAP is unavailable, AppEEARS can fetch SMAP as fallback.
+- The first four durable worker attempts perform **SMAP cache lookup only**; on a cache miss the source remains pending and the run can show a preliminary result if required core weather is ready. Cache-miss retry is 900 seconds (15 minutes), allowing HLS/MODIS status and task IDs to be rechecked. From the fifth worker attempt onward, live SMAP acquisition is allowed. This is designed to keep a first useful result from being blocked by a long SMAP acquisition, while still enriching the same run in later revisions.
+- The first worker attempt still starts HLS/MODIS AppEEARS tasks independently; their task IDs and result states are persisted. A pending task must reuse the saved provider task ID on the next worker attempt rather than submit a duplicate.
+- The crop-water model's SMAP initialization limitation is explicitly disclosed: it uses a root-zone observation only when one is within ±7 days of sowing; otherwise it uses the labelled 35% TAW initial depletion default.
+
+### Durable result-status correction applied to the FieldShift0 Supabase project
+
+A live database inspection found that the deployed `public.worker_save_analysis` RPC previously forced every run with `p_retry_at` to `waiting_for_data`, even when Python correctly sent `preliminary_ready` for optional pending SMAP. This caused a mismatch between the useful preliminary result and the saved run status.
+
+An additive migration now preserves the status contract:
+- optional pending source + required core available → `preliminary_ready`, `completed_at=NULL`, result kind `preliminary`, retry continues;
+- required pending source → `waiting_for_data`, `completed_at=NULL`, result kind `preliminary`, retry continues;
+- no retry required → the engine's configured final/final-with-gaps state is saved.
+
+The migration has been applied successfully to the non-production Supabase project `FieldShift0` (`bipyrlegaxmhwzwrmcmi`). The actual remote migration versions are recorded in the GitHub filenames to avoid CLI history drift:
+- `20261109124135_preserve_preliminary_run_status.sql`
+- `20261109124329_deduplicate_worker_queue_policies.sql`
+- `20261109124402_cache_worker_rls_header.sql`
+
+### Supabase queue-policy cleanup and live DB state
+
+- Duplicate anonymous worker SELECT/UPDATE RLS policies on `private.analysis_run_jobs` have been removed. Exactly one token-gated SELECT policy and one token-gated UPDATE policy remain, plus the independent `service_role` policy.
+- The remaining anon policies still require `private.worker_token_matches` for the `x-fieldshift-worker` header. Access semantics have not been broadened.
+- The current performance advisor still reports two `auth_rls_initplan` warnings for these policies even after scalar-subquery wrapping of the helper/header expressions. Do not claim the warning is cleared; retain it for further plan-level analysis.
+- Security advisor still reports one warning for the owner-scoped `public.request_analysis_run_recheck(uuid)` SECURITY DEFINER RPC. It has not been disabled or altered in this update because the product needs a user-initiated recheck and owner isolation must be preserved.
+- Performance advisor lists four unused indexes (informational; new/empty tables have not exercised them). Health advisor reports no findings.
+- Supabase currently has exactly one active `fieldshift-analysis-worker` schedule at `*/5 * * * *`.
+- `public.analysis_runs`, `private.analysis_run_jobs`, and `private.dataset_cache` had zero rows at the most recent inspection. No test user/run/job was inserted or left behind.
+
+### CI and deployment status
+
+- Code-level verification on commit `fb8b512f6515e22b6f762afb5decad042489ffb2`: Python 3.11 and 3.12 each report **169 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff, and mypy (34 source files) pass.
+- The latest branch head after migration filename reconciliation is `a83f16a753ff9e5f5a73bef4a7a01d0f6a37626a`. Its new GitHub Actions runs are in progress at the time of this update; future sessions must re-check the exact current head and its completed CI, not infer success from the earlier `fb8b512...` commit.
+- PR #1 remains Draft/Open/Unmerged.
+- The newest READY Preview seen during this inspection is still an older source SHA (`8cdd44e7ea293e2105c354556d5e73c0b7c70896`), not the current branch head. No current-head Preview has yet demonstrated this new cache-only/retry logic. The earlier Vercel free-plan deployment-rate limit remains a possible blocker; confirm with live deployment metadata before retrying.
+- No Production deploy, Production environment change, billing change, or PR merge was performed.
+
+### Still not proven — do not mark these as complete
+
+1. **Real Drive round-trip:** the current automated cache tests mock the Drive adapter. A live deployed current-head Preview must upload a real QA-checked SMAP/HLS/MODIS object, read it back, compare bytes/SHA-256, and then prove a cold-instance cache hit.
+2. **Nationwide gridded archive:** the current GEE cache is exact-point data for one selected coordinate per cache key. It is not a raster/area archive for arbitrary Bangladesh fields. Nine reference points alone are not enough. A verified Bangladesh boundary/operational tile geometry and a 2025 SMAP area/tile pilot are still required before describing the archive as Bangladesh-wide.
+3. **Actual 2016–2025 prefetch:** no ten-year national SMAP data backfill has been dispatched. The one-year-per-point cache mechanism is a reusable foundation, not a finished nationwide backfill.
+4. **Live AppEEARS provider-resume:** current code is CI-verified, but a current-head Preview retry has not proven the exact persisted AppEEARS task IDs are reused from Supabase without duplicate task submission.
+5. **Account continuity:** real Magic Link login, submit a genuine authenticated analysis, close/reopen after one or two days, and two-account access isolation remain to be demonstrated against a Preview whose SHA equals the current branch head.
+6. **15–20 minute experience:** this remains a product target, not a guaranteed SLA. NASA publication lag and provider queues can exceed it; only show a useful preliminary result when required core data and their QA gates are ready.
+
+---
+
 ## 8. Implementation sequence
 
 ### Phase A — create durable exact-result caching (first engineering change)
