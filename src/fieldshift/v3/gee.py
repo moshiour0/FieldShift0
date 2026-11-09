@@ -8,11 +8,12 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import google_drive
 from .diagnostics import safe_error
 from .models import Provenance, RemoteDay
 from .provenance import now_iso
@@ -71,6 +72,18 @@ class NEXDeltaResult:
     retry_after_seconds: int | None = None
 
 
+@dataclass(frozen=True)
+class SMAPPointResult:
+    rows: tuple[RemoteDay, ...]
+    status: str
+    coverage_fraction: float
+    retrieval_mode: str
+    retry_after_seconds: int | None = None
+    archive_cache_status: str = "not_configured"
+    archive_object_key: str | None = None
+    archive_sha256: str | None = None
+
+
 def gee_credentials_configured() -> bool:
     return bool(
         os.getenv("FIELD_SHIFT_GEE_PROJECT", "").strip()
@@ -82,6 +95,289 @@ def _gpm_cache_path(cache_dir: Path, lat: float, lon: float, start: date, end: d
     key = f"v4-full-days|NASA/GPM_L3/IMERG_V07|{lat:.5f}|{lon:.5f}|{start.isoformat()}:{end.isoformat()}"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
     return cache_dir / f"gpm_imerg_{digest}.json"
+
+
+def _smap_identity(lat: float, lon: float, start: date, end: date) -> dict[str, Any]:
+    return {
+        "asset": "NASA/SMAP/SPL4SMGP/008",
+        "product": "SPL4SMGP.008",
+        "coordinate": {
+            "latitude": round(lat, 5),
+            "longitude": round(lon, 5),
+            "precision_decimal_degrees": 5,
+        },
+        "requested_dates": {"start": start.isoformat(), "end": end.isoformat()},
+        "layers": ["sm_surface", "sm_rootzone"],
+        "aggregation": "UTC daily mean of exactly eight 3-hourly intervals",
+        "schema_version": 1,
+        "qa_processing_version": "fieldshift-smap-l4-gee-v1",
+    }
+
+
+def _smap_key(identity: dict[str, Any]) -> str:
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _smap_cache_path(cache_dir: Path, key: str) -> Path:
+    return cache_dir / f"smap_l4_gee_{key[:24]}.json"
+
+
+def _decode_smap_rows(rows: Any) -> tuple[RemoteDay, ...]:
+    if not isinstance(rows, list):
+        raise ValueError("SMAP cache observation list is invalid")
+    decoded: list[RemoteDay] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("SMAP cache observation is not an object")
+        provenance_raw = item.get("provenance")
+        provenance = Provenance(**provenance_raw) if isinstance(provenance_raw, dict) else None
+        decoded.append(RemoteDay(
+            d=date.fromisoformat(str(item["d"])),
+            smap_surface_m3_m3=float(item["smap_surface_m3_m3"]),
+            smap_rootzone_m3_m3=float(item["smap_rootzone_m3_m3"]),
+            source=str(item.get("source") or "NASA SMAP SPL4SMGP.008"),
+            provenance=provenance,
+        ))
+    return tuple(decoded)
+
+
+def _smap_shared_cache_read(
+    object_key: str, key: str, identity: dict[str, Any], start: date, end: date,
+) -> tuple[tuple[RemoteDay, ...], dict[str, Any], str] | None:
+    raw = google_drive.get_object(object_key)
+    if raw is None:
+        return None
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+        if not isinstance(envelope, dict) or envelope.get("schema_version") != 1:
+            return None
+        if envelope.get("cache_key") != key or envelope.get("identity") != identity:
+            return None
+        payload = envelope.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        digest = hashlib.sha256(canonical).hexdigest()
+        if digest != envelope.get("payload_sha256"):
+            return None
+        rows = _decode_smap_rows(payload.get("rows"))
+        if any(row.d < start or row.d > end for row in rows):
+            return None
+        meta = payload.get("meta")
+        if not isinstance(meta, dict) or meta.get("retry_after_seconds") is not None:
+            return None
+        return rows, meta, digest
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _smap_shared_cache_write(
+    object_key: str, key: str, identity: dict[str, Any], rows: tuple[RemoteDay, ...],
+    meta: dict[str, Any],
+) -> str:
+    payload = {
+        "rows": [
+            {
+                "d": row.d.isoformat(),
+                "smap_surface_m3_m3": row.smap_surface_m3_m3,
+                "smap_rootzone_m3_m3": row.smap_rootzone_m3_m3,
+                "source": row.source,
+                "provenance": asdict(row.provenance) if row.provenance else None,
+            }
+            for row in rows
+        ],
+        "meta": meta,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    envelope = {
+        "schema_version": 1,
+        "cache_key": key,
+        "identity": identity,
+        "payload_sha256": digest,
+        "payload": payload,
+    }
+    raw = json.dumps(envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    google_drive.put_object(object_key, raw, sha256=hashlib.sha256(raw).hexdigest())
+    readback = google_drive.get_object(object_key)
+    if readback is None or readback != raw:
+        raise google_drive.GoogleDriveError("SMAP Drive cache read-back did not match the uploaded bytes")
+    verified = _smap_shared_cache_read(object_key, key, identity, date.fromisoformat(identity["requested_dates"]["start"]),
+                                       date.fromisoformat(identity["requested_dates"]["end"]))
+    if verified is None or verified[2] != digest:
+        raise google_drive.GoogleDriveError("SMAP Drive cache metadata or payload checksum validation failed")
+    return digest
+
+
+def _smap_result(
+    rows: tuple[RemoteDay, ...], expected: int, *, retrieval_mode: str,
+    retry_after_seconds: int | None = None, archive_cache_status: str = "not_configured",
+    archive_object_key: str | None = None, archive_sha256: str | None = None,
+) -> SMAPPointResult:
+    coverage = len(rows) / max(1, expected)
+    status = "available" if len(rows) == expected else "partial" if rows else "pending" if retry_after_seconds else "unavailable"
+    return SMAPPointResult(
+        rows=rows, status=status, coverage_fraction=round(min(1.0, coverage), 5),
+        retrieval_mode=retrieval_mode, retry_after_seconds=retry_after_seconds,
+        archive_cache_status=archive_cache_status, archive_object_key=archive_object_key,
+        archive_sha256=archive_sha256,
+    )
+
+
+def smap_daily_point_timeseries(
+    lat: float, lon: float, start: date, end: date, cache_dir: str | Path,
+) -> SMAPPointResult:
+    """Fetch point SMAP L4 daily means from the 3-hourly GEE collection.
+
+    A date is accepted only when all eight 3-hourly intervals have valid
+    surface and root-zone values at the selected native grid cell. No gap is
+    interpolated. A recent trailing gap is returned as pending/partial so the
+    durable worker can check again after provider ingestion catches up.
+    """
+    if not gee_credentials_configured():
+        raise ValueError("Google Earth Engine credentials are not configured")
+    if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise ValueError("invalid latitude/longitude for NASA SMAP")
+    if start > end or start < date(2015, 3, 31) or end > date.today():
+        raise ValueError("SMAP date window must be within 2015-03-31 and today")
+    expected = (end - start).days + 1
+    if expected > 366:
+        raise ValueError("SMAP point request is limited to 366 days; split longer history into year-sized windows")
+
+    identity = _smap_identity(lat, lon, start, end)
+    cache_key = _smap_key(identity)
+    object_key = f"satellite-point-cache/v1/smap-gee/{cache_key}.json"
+    if google_drive.configured():
+        try:
+            shared = _smap_shared_cache_read(object_key, cache_key, identity, start, end)
+        except google_drive.GoogleDriveError:
+            shared = None
+        if shared is not None:
+            rows, meta, digest = shared
+            return _smap_result(
+                rows, expected, retrieval_mode="google_drive_cache",
+                archive_cache_status="verified", archive_object_key=object_key, archive_sha256=digest,
+            )
+
+    cache_path = _smap_cache_path(Path(cache_dir), cache_key)
+    cached, age = _read_cache(cache_path)
+    if cached and cached.get("identity") == identity and age is not None:
+        cached_meta = cached.get("meta") or {}
+        retry_after = cached_meta.get("retry_after_seconds")
+        ttl = max(60, int(os.getenv("FIELD_SHIFT_SMAP_GEE_CACHE_TTL_SECONDS", "604800" if retry_after is None else "600")))
+        if age <= ttl:
+            try:
+                rows = _decode_smap_rows(cached.get("rows"))
+                return _smap_result(
+                    rows, expected, retrieval_mode="local_cache", retry_after_seconds=retry_after,
+                    archive_cache_status=str(cached_meta.get("archive_cache_status") or "not_configured"),
+                    archive_object_key=cached_meta.get("archive_object_key"),
+                    archive_sha256=cached_meta.get("archive_sha256"),
+                )
+            except (KeyError, TypeError, ValueError):
+                pass
+
+    ee = _initialise_ee()
+    point = ee.Geometry.Point([lon, lat])
+    collection = (
+        ee.ImageCollection("NASA/SMAP/SPL4SMGP/008")
+        .filterDate(start.isoformat(), (end + timedelta(days=1)).isoformat())
+        .select(["sm_surface", "sm_rootzone"])
+    )
+
+    def daily_sample(offset):
+        day_start = ee.Date(start.isoformat()).advance(offset, "day")
+        subset = collection.filterDate(day_start, day_start.advance(1, "day"))
+        seed = ee.Image.constant([0, 0]).rename(["sm_surface", "sm_rootzone"]).selfMask()
+        safe_subset = subset.merge(ee.ImageCollection.fromImages([seed]))
+        daily = safe_subset.mean()
+        interval_count = subset.select("sm_surface").count().rename("n_intervals")
+        daily = daily.updateMask(interval_count.eq(8)).addBands(interval_count)
+        stats = daily.reduceRegion(
+            reducer=ee.Reducer.first(), geometry=point, scale=11000, maxPixels=10000,
+        )
+        return ee.Feature(None, stats).set({"date": day_start.format("YYYY-MM-dd")})
+
+    features = ee.List.sequence(0, expected - 1).map(daily_sample)
+    result = ee.FeatureCollection(features).getInfo()
+    provenance = Provenance(
+        source="NASA SMAP SPL4SMGP.008 via Google Earth Engine",
+        source_type="satellite",
+        retrieval_date=now_iso(),
+        spatial_resolution="~11 km pixel; native ~9 km EASE-Grid 2.0",
+        temporal_resolution="3-hourly input aggregated to UTC daily mean; exactly 8 intervals required",
+        citation="https://doi.org/10.5067/T5RUATAQREF8",
+        confidence=0.88,
+    )
+    rows: list[RemoteDay] = []
+    for feature in result.get("features", []):
+        properties = feature.get("properties", {}) if isinstance(feature, dict) else {}
+        try:
+            observed_day = date.fromisoformat(str(properties["date"]))
+            intervals = int(properties.get("n_intervals") or 0)
+            surface = _finite(properties.get("sm_surface"))
+            rootzone = _finite(properties.get("sm_rootzone"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if intervals != 8 or surface is None or rootzone is None:
+            continue
+        if not 0.0 <= surface <= 0.9 or not 0.0 <= rootzone <= 0.9:
+            continue
+        rows.append(RemoteDay(
+            d=observed_day,
+            smap_surface_m3_m3=surface,
+            smap_rootzone_m3_m3=rootzone,
+            source=provenance.source,
+            provenance=provenance,
+        ))
+
+    rows.sort(key=lambda row: row.d)
+    present = {row.d for row in rows}
+    trailing_missing = end not in present or any(
+        date.fromordinal(day.toordinal()) not in present
+        for day in (end - timedelta(days=offset) for offset in range(min(6, expected)))
+    )
+    recent_window = end >= date.today() - timedelta(days=6)
+    retry_after = 3600 if trailing_missing and recent_window else None
+    result_state = _smap_result(tuple(rows), expected, retrieval_mode="google_earth_engine",
+                                retry_after_seconds=retry_after)
+    meta = {
+        "status": result_state.status,
+        "coverage_fraction": result_state.coverage_fraction,
+        "retry_after_seconds": result_state.retry_after_seconds,
+        "retrieved_at": now_iso(),
+    }
+    archive_status = "not_configured"
+    archive_digest = None
+    if result_state.status in {"available", "partial"} and retry_after is None and google_drive.configured():
+        try:
+            archive_digest = _smap_shared_cache_write(object_key, cache_key, identity, tuple(rows), meta)
+            archive_status = "verified"
+        except Exception:
+            archive_status = "write_failed"
+    meta.update(archive_cache_status=archive_status, archive_object_key=object_key if archive_status == "verified" else None,
+                archive_sha256=archive_digest)
+    _write_cache(cache_path, {
+        "identity": identity,
+        "rows": [
+            {
+                "d": row.d.isoformat(),
+                "smap_surface_m3_m3": row.smap_surface_m3_m3,
+                "smap_rootzone_m3_m3": row.smap_rootzone_m3_m3,
+                "source": row.source,
+                "provenance": asdict(row.provenance) if row.provenance else None,
+            }
+            for row in rows
+        ],
+        "meta": meta,
+    })
+    return _smap_result(
+        tuple(rows), expected, retrieval_mode=result_state.retrieval_mode,
+        retry_after_seconds=retry_after, archive_cache_status=archive_status,
+        archive_object_key=object_key if archive_status == "verified" else None,
+        archive_sha256=archive_digest,
+    )
 
 
 def _gpm_date_range(start: date, end: date) -> list[date]:
