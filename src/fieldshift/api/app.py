@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import math
 import os
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fieldshift.api import supabase_auth
+from fieldshift.api.analysis_worker import WorkerAPIError, process_one as process_analysis_worker_one
 from fieldshift.api.product import (
     create_analysis,
     create_demo,
@@ -418,6 +420,56 @@ def field_preview(payload: dict[str, Any]) -> dict[str, Any]:
         "warnings": ["The Mymensingh coordinate check is only a pilot-area hint; no field-specific local validation is established by this preview."],
         "status": "inputs_received",
     }
+
+
+
+
+@app.post("/api/analysis/queue", status_code=202)
+def queue_analysis_api(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    import uuid
+
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in before queuing an analysis.")
+    body = dict(payload or {})
+    try:
+        client_request_id = str(uuid.UUID(str(body.pop("client_request_id", ""))))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail="A valid client_request_id is required.") from exc
+    try:
+        queued = supabase_auth.queue_analysis_request(
+            access_token=token,
+            client_request_id=client_request_id,
+            request_payload=body,
+        )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {400, 401, 403, 409, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {
+        "queued": True,
+        "already_queued": bool(queued.get("already_queued")),
+        "run": {
+            "id": str(queued["run_id"]),
+            "status": str(queued.get("status") or "queued"),
+            "status_message": (
+                "Analysis is safely queued. Dataset checks continue even after you close this page."
+            ),
+        },
+    }
+
+
+@app.post("/api/internal/worker")
+def internal_analysis_worker(request: Request) -> dict[str, Any]:
+    expected = os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
+    supplied = request.headers.get("x-fieldshift-worker", "").strip()
+    if len(expected) < 48 or not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Worker authentication failed.")
+    try:
+        return process_analysis_worker_one()
+    except WorkerAPIError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="The background analysis worker failed safely.") from exc
 
 
 @app.post("/api/analysis/run")
