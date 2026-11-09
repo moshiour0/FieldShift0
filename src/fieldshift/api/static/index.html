@@ -143,7 +143,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 <div class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,auth:{config:null,session:null,user:null,loading:true}};
+const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,currentQueuedRunId:null,workerPollTimer:null,workerPollAttempts:0,auth:{config:null,session:null,user:null,loading:true}};
 const qs=s=>document.querySelector(s); const qsa=s=>Array.from(document.querySelectorAll(s));
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>`${Math.round(Math.max(0,Math.min(1,Number(v)||0))*100)}%`;
@@ -213,6 +213,56 @@ async function accountApi(path,options={}){
   if(!response.ok)throw Error(data.detail||'Could not load your account data.');
   return data;
 }
+function hideResultPanelsUntilReady(){
+  state.data=null;qs('#snapshotMetrics').innerHTML='';qs('#evidenceList').innerHTML='';
+  for(const id of ['priority-section','strategy-section','climate-section','decision-section'])qs('#'+id)?.classList.add('hidden');
+}
+function showQueuedRun(run,message){
+  const safeRun=run||{};
+  renderRunReadiness({run:{status:safeRun.status||'queued',status_message:message||safeRun.status_message||'Your saved analysis is waiting for the background worker.'}});
+  qs('#pending-evidence').classList.remove('hidden');
+  qs('#pending-message').textContent=message||safeRun.status_message||'Queued safely. You can close this page; the server will continue checking datasets.';
+  qs('#refresh-evidence').classList.add('hidden');qs('#stop-refresh').classList.add('hidden');
+}
+function showWorkerPending(detail){
+  const run=detail.run||{};const sources=detail.sources||[];
+  const pending=sources.filter(s=>['queued','pending','retrying','partial'].includes(String(s.status||'').toLowerCase()));
+  const names=pending.map(s=>s.source_name).filter(Boolean);
+  const message=run.stage==='retry_exhausted'
+    ? 'Automatic checks reached their retry limit. This run remains saved as WAITING FOR DATA; reopen it later to request another check.'
+    : names.length ? 'Background checks continue for: '+names.join(', ')+'. You may close this page.'
+    : run.status_message||'Background processing continues. You may close this page.';
+  if(run.stage==='retry_exhausted'||['failed','cancelled','final_ready','final_with_gaps'].includes(run.status)){
+    qs('#pending-evidence').classList.add('hidden');
+    qs('#refresh-evidence').classList.remove('hidden');qs('#stop-refresh').classList.remove('hidden');
+  }else{
+    qs('#pending-evidence').classList.remove('hidden');qs('#pending-message').textContent=message;
+    qs('#refresh-evidence').classList.add('hidden');qs('#stop-refresh').classList.add('hidden');
+  }
+}
+async function pollQueuedRun(runId,version,attempt){
+  if(version!==state.pollVersion||state.currentQueuedRunId!==runId||!state.auth.user)return;
+  if(attempt>=120){qs('#pending-message').textContent='This run is still saved and its background schedule continues. Reopen My Runs later for the latest result.';return;}
+  try{
+    const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
+    if(version!==state.pollVersion||state.currentQueuedRunId!==runId)return;
+    const run=detail.run||{};
+    if(detail.latest_result&&detail.latest_result.result_payload){
+      const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
+      data.run.saved_run_id=run.id;data.run.status=run.status;data.run.status_message=run.status_message||data.run.status_message;
+      data.run.is_final=['final_ready','final_with_gaps'].includes(run.status);
+      applyData(data);showWorkerPending(detail);
+    }else{showQueuedRun(run);}
+    const terminal=run.stage==='retry_exhausted'||['failed','cancelled','final_ready','final_with_gaps'].includes(run.status)||Boolean(run.completed_at);
+    if(terminal){showWorkerPending(detail);return;}
+    state.workerPollAttempts=attempt+1;
+    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),15000);
+  }catch(e){
+    qs('#pending-message').textContent='Could not refresh the run status just now. The saved background job is unaffected; My Runs can reload it later.';
+    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),30000);
+  }
+}
+
 function renderAccountButton(){
   const button=qs('#account-button');if(!button)return;
   button.textContent=state.auth.user?'My Runs':'Sign in';
@@ -282,16 +332,20 @@ async function loadAccountRuns(){
 }
 async function loadSavedRun(runId){
   try{
-    stopEvidenceRefresh();state.pendingAttempts=0;
+    stopEvidenceRefresh();state.pendingAttempts=0;const version=state.pollVersion;
     const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
-    if(!detail.latest_result?.result_payload)throw Error('This saved run has no result snapshot yet.');
-    const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
-    data.run.saved_run_id=detail.run.id;
-    data.run.status=detail.run.status;
-    data.run.status_message=detail.run.status_message||data.run.status_message;
     state.lastPayload={...(detail.run.request_payload||{}),client_request_id:detail.run.client_request_id};
-    state.clientRequestId=detail.run.client_request_id;
-    applyData(data);scheduleEvidenceRefresh(data,state.pollVersion);closeDrawer();scrollToId('evidence-section');
+    state.clientRequestId=detail.run.client_request_id;state.currentQueuedRunId=runId;
+    closeDrawer();scrollToId('evidence-section');
+    if(detail.latest_result&&detail.latest_result.result_payload){
+      const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
+      data.run.saved_run_id=detail.run.id;data.run.status=detail.run.status;data.run.status_message=detail.run.status_message||data.run.status_message;
+      data.run.is_final=['final_ready','final_with_gaps'].includes(detail.run.status);
+      applyData(data);showWorkerPending(detail);
+    }else{hideResultPanelsUntilReady();showQueuedRun(detail.run);}
+    if(detail.run.stage!=='retry_exhausted'&&!['failed','cancelled','final_ready','final_with_gaps'].includes(detail.run.status)&&!detail.run.completed_at){
+      pollQueuedRun(runId,version,0);
+    }
     toast('Saved analysis restored from your account');
   }catch(e){toast(e.message)}
 }
@@ -375,8 +429,10 @@ function setDatePreset(){
   qs('#start-date').value=start;qs('#end-date').value=end;qs('#date-error').textContent='';
 }
 function stopEvidenceRefresh(){
-  clearTimeout(state.pendingTimer);state.pendingTimer=null;state.pollVersion++;
-  if(!qs('#pending-evidence').classList.contains('hidden'))qs('#pending-message').textContent='Automatic checks stopped. Check again to resume the existing NASA tasks.';
+  clearTimeout(state.pendingTimer);state.pendingTimer=null;
+  clearTimeout(state.workerPollTimer);state.workerPollTimer=null;
+  state.currentQueuedRunId=null;state.workerPollAttempts=0;state.pollVersion++;
+  if(!qs('#pending-evidence').classList.contains('hidden'))qs('#pending-message').textContent='Browser checks stopped. Any accepted background run continues on the server.';
 }
 function scheduleEvidenceRefresh(data,version){
   if(version!==state.pollVersion)return;
@@ -396,25 +452,31 @@ function scheduleEvidenceRefresh(data,version){
 async function submitAnalysis(payload,isRefresh=false){
   if(state.analysisBusy)return;
   state.analysisBusy=true;const version=state.pollVersion;
-  showBusy(isRefresh?'Checking pending NASA datasets…':'Running evidence + simulation…');
+  showBusy(isRefresh?'Checking pending NASA datasets…':'Saving analysis request…');
   qs('#refresh-evidence').disabled=true;
   try{
-    const headers={'Content-Type':'application/json'};
-    const accessToken=await getAuthToken();
-    if(accessToken)headers.Authorization=`Bearer ${accessToken}`;
+    const headers={'Content-Type':'application/json'};const accessToken=await getAuthToken();
+    if(accessToken&&!isRefresh){
+      headers.Authorization='Bearer '+accessToken;
+      const queued=await fetch('/api/analysis/queue',{method:'POST',headers,body:JSON.stringify(payload)});
+      const queuedData=await queued.json().catch(()=>({}));
+      if(!queued.ok)throw Error(queuedData.detail||'Could not queue this analysis.');
+      if(version!==state.pollVersion)return;
+      state.currentQueuedRunId=queuedData.run.id;state.workerPollAttempts=0;
+      hideResultPanelsUntilReady();
+      qs('#evidence-window').textContent='Requested observations: '+payload.start_date+' to '+payload.end_date+'. The run is stored in My Runs.';
+      showQueuedRun(queuedData.run,'Analysis request saved. A server-side worker will check NASA datasets and update this run automatically—even if you close this page.');
+      scrollToId('evidence-section');toast('Analysis safely queued. Background processing started.');
+      pollQueuedRun(state.currentQueuedRunId,version,0);return;
+    }
+    if(accessToken)headers.Authorization='Bearer '+accessToken;
     const r=await fetch('/api/analysis/run',{method:'POST',headers,body:JSON.stringify(payload)});
-    const raw=await r.text();let d;
-    try{d=JSON.parse(raw)}catch{throw Error(`Server returned HTTP ${r.status}. If this was a timeout, check again to resume NASA tasks.`)}
+    const raw=await r.text();let d;try{d=JSON.parse(raw)}catch{throw Error('Server returned HTTP '+r.status+'. If this was a timeout, check again to resume NASA tasks.')}
     if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:'Analysis failed');
     if(version!==state.pollVersion)return;
     applyData(d);scheduleEvidenceRefresh(d,version);
-    if(!isRefresh){
-      scrollToId('evidence-section');
-      if(d.persistence?.saved)toast('Analysis saved to My Runs');
-      else if(state.auth.user&&d.persistence?.saved===false)toast('Analysis completed, but account save failed. Check My Runs before leaving.');
-      else toast(d.run.status==='preliminary_ready'?'Preliminary result only; review data readiness':d.run.status==='final_with_gaps'?'Result ready with data gaps; review source coverage':'Analysis complete');
-    }
-  }catch(e){toast(e.message);if(isRefresh)qs('#pending-message').textContent=`${e.message} Use Check now to try again.`}
+    if(!isRefresh){scrollToId('evidence-section');if(d.persistence&&d.persistence.saved)toast('Analysis saved to My Runs');else toast(d.run.status==='preliminary_ready'?'Preliminary result only; review data readiness':d.run.status==='final_with_gaps'?'Result ready with data gaps; review source coverage':'Analysis complete');}
+  }catch(e){toast(e.message);if(isRefresh)qs('#pending-message').textContent=e.message+' Use Check now to try again.'}
   finally{state.analysisBusy=false;qs('#refresh-evidence').disabled=Date.now()<state.retryNotBefore;clearBusy()}
 }
 async function runAnalysis(){
@@ -458,14 +520,15 @@ async function runWhatIf(scenario){
 
 function showBusy(text){qs('#qualityBadge').textContent=text;qs('#qualityBadge').className='badge warn'}
 function clearBusy(){if(state.data)renderQuality()}
-function applyData(data){state.data=data;renderRunReadiness(data);const window=data.run.evidence_window;qs('#evidence-window').textContent=window?.start_date?`Requested observations: ${window.start_date} to ${window.end_date} (inclusive). Crop plan: ${window.plan_start_year}–${window.plan_end_year}.`:'Demo snapshot — choose a date range and Run analysis for a new request.';state.activeScenario='baseline';renderQuality();renderSnapshot();renderEvidence();renderPrioritySummary();renderStrategies();renderScenarios();renderExplanation();renderReport();setStep('strategies');setTimeout(()=>setStep('strategies'),0);}
+function applyData(data){state.data=data;for(const id of ['priority-section','strategy-section','climate-section','decision-section'])qs('#'+id)?.classList.remove('hidden');renderRunReadiness(data);const window=data.run.evidence_window;qs('#evidence-window').textContent=window?.start_date?`Requested observations: ${window.start_date} to ${window.end_date} (inclusive). Crop plan: ${window.plan_start_year}–${window.plan_end_year}.`:'Demo snapshot — choose a date range and Run analysis for a new request.';state.activeScenario='baseline';renderQuality();renderSnapshot();renderEvidence();renderPrioritySummary();renderStrategies();renderScenarios();renderExplanation();renderReport();setStep('strategies');setTimeout(()=>setStep('strategies'),0);}
 function renderRunReadiness(data){
   const run=data?.run||{},box=qs('#run-readiness');
   if(!box)return;
   const labels={
+    queued:['ANALYSIS QUEUED','Your analysis request is saved. A background worker will process it even when this page is closed.'],
+    running:['ANALYSIS RUNNING','The background worker is processing your saved request.'],
     preliminary_ready:['PRELIMINARY RESULT','Some data are still processing or the required core weather input is not ready. This result is not final.'],
     waiting_for_data:['WAITING FOR DATA','A required dataset is not ready. No final prediction should be used yet.'],
-    running:['ANALYSIS RUNNING','Evidence checks have passed. The analysis result is still being computed.'],
     final_with_gaps:['FINAL RESULT · DATA GAPS','The core weather input is ready, but one or more supplemental sources are incomplete or unavailable. Review the evidence list.'],
     final_ready:['FINAL RESULT · VERIFIED INPUTS','Required core evidence and configured/requested sources passed their readiness checks.']
   };
