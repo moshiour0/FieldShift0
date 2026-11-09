@@ -235,6 +235,61 @@ def test_smap_year_cache_chunks_are_sliced_to_exact_user_window(monkeypatch, tmp
     )
 
 
+def test_pipeline_checks_drive_smap_cache_when_gee_credentials_are_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: False)
+    monkeypatch.setattr(pipeline.google_drive, "configured", lambda: True)
+
+    cached_row = RemoteDay(
+        START,
+        smap_surface_m3_m3=0.23,
+        smap_rootzone_m3_m3=0.33,
+        source="NASA SMAP SPL4SMGP.008 via Google Earth Engine (shared cache)",
+    )
+    result = gee.SMAPPointResult(
+        rows=(cached_row,),
+        status="available",
+        coverage_fraction=1.0,
+        retrieval_mode="google_drive_cache",
+        archive_cache_status="verified",
+        archive_object_key="satellite-point-cache/v1/smap-gee/cache.json",
+        archive_object_keys=("satellite-point-cache/v1/smap-gee/cache.json",),
+        archive_sha256="b" * 64,
+    )
+    monkeypatch.setattr(pipeline, "smap_daily_point_timeseries", lambda *a, **k: result)
+    app_result = appeears.AppEEARSResult(
+        remote=(
+            RemoteDay(START, ndvi=0.58, source="NASA HLS"),
+            RemoteDay(START, modis_et_mm=1.9, source="NASA MODIS MOD16"),
+        ),
+        datasets=(
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    app_calls = []
+
+    def sampled_products(*args, **kwargs):
+        app_calls.append(kwargs)
+        return app_result
+
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", sampled_products)
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    remote = pipeline._load_optional_remote(
+        tmp_path, records, field, START, END, tmp_path, allow_live_smap=False,
+    )
+
+    smap = next(row for row in records if row["name"] == "NASA SMAP")
+    assert smap["status"] == "available"
+    assert smap["retrieval_mode"] == "google_drive_cache"
+    assert smap["archive_cache_status"] == "verified"
+    assert app_calls and app_calls[0]["source_keys"] == {"hls_vi", "modis_et"}
+    assert any(row.smap_surface_m3_m3 == pytest.approx(0.23) for row in remote)
+    assert any(row.ndvi == pytest.approx(0.58) for row in remote)
+
+
 def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
     monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
