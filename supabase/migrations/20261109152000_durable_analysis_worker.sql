@@ -91,12 +91,8 @@ begin
         raise exception 'Invalid run request' using errcode = '22023';
     end if;
 
-    begin
-        v_start := (p_request_payload->>'start_date')::date;
-        v_end := (p_request_payload->>'end_date')::date;
-    exception when others then
-        raise exception 'Analysis start_date and end_date must use YYYY-MM-DD' using errcode = '22023';
-    end;
+    v_start := nullif(p_request_payload->>'start_date', '')::date;
+    v_end := nullif(p_request_payload->>'end_date', '')::date;
     if v_start is null or v_end is null or v_end < v_start then
         raise exception 'Analysis date window is invalid' using errcode = '22023';
     end;
