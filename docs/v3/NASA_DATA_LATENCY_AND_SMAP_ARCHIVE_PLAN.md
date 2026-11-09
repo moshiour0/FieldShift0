@@ -412,18 +412,18 @@ The migration has been applied successfully to the non-production Supabase proje
 
 ### CI and deployment status
 
-- Latest exact source head before this document update: `8fd9c0ce83e646c5eb4a6eed2d6abe3959e47793`. GitHub Actions runs #544 and #545 both completed successfully for this exact SHA. Python 3.11 and 3.12 each report **173 passed, one existing Starlette/httpx TestClient deprecation warning**; `compileall`, strict Ruff and mypy (34 source files) all pass.
-- Runtime code changes through `eb635f5a94fcd3236e8e1c1062c7e507feb0585a` (GEE-cache read without live credentials and pipeline cache lookup through Google Drive) are covered by successful push run #543 and PR run #542. The later exact-head commits through `8fd9c0c...` update documentation only.
-- PR #1 remains Draft/Open/Unmerged.
-- Latest READY runtime Preview: `https://field-shift0-ph1yygjti.vercel.app`, deployment `dpl_AK4hAaoed9BfpKJAdL7CdKYXZKSC`, source SHA `55a7a9ca766b1380b4f399bc51def874391cd07c`.
-- The `55a7a9c...` Preview contains the first-attempt SMAP cache-only policy, second-attempt live retrieval, GEE-first path, AppEEARS fallback, and the core durable worker changes. It does **not** yet contain the later runtime cache-portability changes `e2e68a2...` and `95b4fe4...`; these are CI-verified on the current branch but awaiting a new Preview.
-- Protected Preview `GET /api/auth/config` returned HTTP 200 with `configured=true` and provider `email_magic_link`.
-- A safe idle worker probe was submitted from FieldShift0 Supabase only after confirming zero non-terminal jobs (`queued`, `retrying`, `running`). The Vault-backed request to `/api/internal/worker/tick` on the `55a7a9c...` Preview returned HTTP 200, `processed=false`, `No queued analysis job is ready.` No user analysis was processed.
-- This smoke test proves protected Preview routing, worker token validation, Vercel bypass, Supabase connectivity and the empty-queue claim path. It does **not** prove a real authenticated submission, exact AppEEARS task-ID resume, second-attempt SMAP fetch or live NASA-derived Drive object write/read.
-- Project-level Vercel environment metadata confirms the Preview target has all four Google Drive settings, AppEEARS user/password and both GEE settings. Secret values were not read or copied.
-- A fresh Preview deployment attempt for the current runtime commit returned HTTP 402, `api-deployments-free-per-day`: the Vercel free-plan daily deployment quota (more than 100/day) is exhausted, with `retryAfter=86400` seconds. No available local CLI checkout exists for the documented fallback. Do not change the plan/billing automatically; ask the user to wait for quota reset or authorize an appropriate plan change.
-- The Vercel Hobby runtime-log API returned a 400 retention-limit response for the requested one-hour window; this is an observability-plan limitation, not an application error.
-- No Production deploy, Production environment change, billing change, or PR merge was performed.
+- Current branch head at this update: `dda8555a70bbb1ac279cf37c76e62a74a814b0e7`. The two commits after runtime code head `eb635f5a94fcd3236e8e1c1062c7e507feb0585a` modify only this handoff Markdown file.
+- Exact-current-head PR workflow run #547 (`42625768356`) completed successfully. Python 3.11 and Python 3.12 each report **173 passed, 1 existing Starlette/httpx TestClient deprecation warning**. `compileall`, strict Ruff and mypy (34 source files) all pass in both matrix jobs.
+- Runtime code through `eb635f5a94fcd3236e8e1c1062c7e507feb0585a` includes shared Google Drive SMAP cache lookup without requiring live GEE credentials and the pipeline gate that permits Drive-cache reuse. The latest two commits after this runtime SHA are documentation-only; therefore the READY deployment below contains the same runtime source code as the current branch head.
+- PR #1 remains **Draft / Open / Unmerged**.
+- Latest READY runtime Preview: `https://field-shift0-76gice8g5.vercel.app`, deployment `dpl_JBuwpxmGuyD8a27yL24e96nirTXx`, source SHA `eb635f5a94fcd3236e8e1c1062c7e507feb0585a`.
+- The earlier READY Preview `https://field-shift0-ph1yygjti.vercel.app` (deployment `dpl_AK4hAaoed9BfpKJAdL7CdKYXZKSC`, source `55a7a9c...`) was used for the protected auth-config and safe empty-worker smoke checks. Those checks returned HTTP 200; the worker correctly reported `processed=false` because no job was queued. This proves protected routing, bypass/token handling, Supabase connectivity and empty-queue behavior only. It does **not** prove a real authenticated submission, NASA task execution, AppEEARS task-ID reuse, second-attempt SMAP retrieval or a live Drive cache write/read.
+- Project-level Vercel environment metadata confirmed Preview-target configuration entries for the four Google Drive settings, AppEEARS user/password and both GEE settings. Secret values were not read or copied.
+- A fresh exact-head Preview deployment attempt for `dda8555...` returned HTTP 402, `api-deployments-free-per-day`, with `retryAfter=86400` seconds. The Vercel PR status still reports `build-rate-limit`. This is a Vercel daily deployment quota, not an application build failure or a five-minute transient. The documented CLI fallback is unavailable in this runtime because there is no linked repository checkout and no `vercel` executable. Do not loop deployment calls, change billing/plan, or promote Production. Retry only after Vercel's indicated quota window resets.
+- The Vercel Hobby runtime-log API returned a 400 retention-limit response for the requested one-hour window. Treat this as an observability-plan limitation, not an application runtime error.
+- Supabase non-production migrations through `20261109124402` are present. Exactly one `fieldshift-analysis-worker` cron job is active at `*/5 * * * *`.
+- No Production deployment, Production environment/configuration change, billing/plan change, or PR merge was performed.
+
 ### Still not proven — do not mark these as complete
 
 1. **Real Drive round-trip:** the current automated cache tests mock the Drive adapter. A deployed Preview must upload a real NASA-derived QA-checked SMAP/HLS/MODIS object, read it back, compare bytes/SHA-256, and then prove a cold-instance cache hit.
@@ -447,7 +447,7 @@ The migration has been applied successfully to the non-production Supabase proje
 5. Never archive a pending/failed task or a product with no usable values.
 6. Add tests for cache hit, cache miss, invalid checksum, Drive outage, exact date-window slicing, product/version mismatch, and no duplicate task POST.
 
-### Phase B — make the first result independent of slow optional SMAP (implemented; live run acceptance remains) (implemented; real NASA run acceptance remains)
+### Phase B — make the first result independent of slow optional SMAP (implemented; live NASA run acceptance remains)
 
 1. Inspect the model's actual use of SMAP fields and define a versioned source dependency contract.
 2. Keep NASA POWER as required core weather under the current policy.
