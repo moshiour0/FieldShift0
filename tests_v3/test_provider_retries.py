@@ -119,11 +119,18 @@ def test_requests_are_paced_across_products(wire, monkeypatch):
 
 
 def test_retry_details_survive_the_website_response():
-    item = _evidence_state([{"name": "NASA SMAP", "status": "retrying", "http_status": 429,
-                             "request_stage": "task-list", "retry_after_seconds": 120}], 0)["items"][0]
+    item = _evidence_state([{
+        "name": "NASA SMAP",
+        "status": "retrying",
+        "http_status": 429,
+        "request_stage": "task-list",
+        "retry_after_seconds": 120,
+        "provider_task_id": "appeears-task-123",
+    }], 0)["items"][0]
     assert item["retry_after_seconds"] == 120
     assert item["http_status"] == 429
     assert item["request_stage"] == "task-list"
+    assert item["provider_task_id"] == "appeears-task-123"
 
 
 def test_nex_timeout_resumes_only_missing_month_at_iowa_coordinate(monkeypatch, tmp_path):
