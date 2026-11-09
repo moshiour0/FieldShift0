@@ -328,10 +328,10 @@ def process_one(worker_token: str | None = None) -> dict[str, Any]:
             # the immutable farmer request snapshot.
             request_payload["_provider_task_ids"] = saved_task_ids
 
-        # First four passes: check shared/local SMAP caches only, allowing the
-        # 15–20 minute HLS/MODIS tasks to settle without a long SMAP query.
-        # From attempt five onward, acquire SMAP in the background and enrich
-        # the same saved run.
+        # The initial pass checks shared/local SMAP caches only, allowing the
+        # 15-minute source refresh to complete before starting a long SMAP
+        # acquisition. The second durable attempt starts live SMAP retrieval
+        # and enriches the same saved run without changing the request snapshot.
         request_payload["_allow_live_smap"] = int(job.get("attempts") or 1) >= 2
 
         result = create_analysis(request_payload)
