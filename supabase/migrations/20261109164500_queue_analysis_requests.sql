@@ -174,7 +174,26 @@ begin
         '3.3.0', 'v1', v_start, v_end,
         'queued', 'queued', 0, 'Your analysis is safely queued for background processing.'
     )
+    on conflict (user_id, client_request_id) do nothing
     returning id into v_run_id;
+
+    if v_run_id is null then
+        -- Close the concurrent-submit race: the winning request owns this
+        -- idempotency key. Reuse it only when the payload hash also matches.
+        select id, request_sha256
+          into v_existing_id, v_existing_hash
+        from public.analysis_runs
+        where user_id = v_user_id
+          and client_request_id = p_client_request_id;
+
+        if v_existing_id is null then
+            raise exception 'The analysis request could not be queued. Please retry.' using errcode = '40001';
+        end if;
+        if v_existing_hash <> v_request_hash then
+            raise exception 'client_request_id was already used for a different request' using errcode = '23505';
+        end if;
+        return jsonb_build_object('run_id', v_existing_id, 'status', 'queued', 'already_queued', true);
+    end if;
 
     return jsonb_build_object('run_id', v_run_id, 'status', 'queued', 'already_queued', false);
 end;
