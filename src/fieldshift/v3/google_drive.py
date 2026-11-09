@@ -311,7 +311,7 @@ def put_object(key: str, content: bytes, *, sha256: str | None = None) -> dict[s
 def verify_storage() -> dict[str, str]:
     """Perform a temporary Drive write/read/delete round-trip before ingestion."""
     key = f"_preflight/probe-{uuid.uuid4().hex}.txt"
-    marker = f"FieldShift0 Drive preflight {uuid.uuid4().hex}".encode("utf-8")
+    marker = f"FieldShift0 Drive preflight {uuid.uuid4().hex}".encode()
     parts = _parts(key)
     parent_id = _resolve_parent(parts[:-1], create=True)
     if parent_id is None:
