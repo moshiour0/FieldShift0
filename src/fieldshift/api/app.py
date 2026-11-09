@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from fieldshift.api import supabase_auth
 from fieldshift.api.product import (
     create_analysis,
     create_demo,
@@ -55,6 +56,143 @@ if school_game_dir.is_dir():
 
 def _jsonable(run) -> dict[str, Any]:
     return json.loads(json.dumps(asdict(run), default=str))
+
+
+
+def _auth_context(request: Request, *, required: bool = True) -> tuple[str | None, dict[str, Any] | None]:
+    token = supabase_auth.bearer_token(request.headers.get("authorization"))
+    if not token:
+        if required:
+            raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
+        return None, None
+    try:
+        return token, supabase_auth.get_user(token)
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+def _persist_authenticated_response(
+    request: Request,
+    request_payload: dict[str, Any],
+    response_payload: dict[str, Any],
+) -> None:
+    token, user = _auth_context(request, required=False)
+    if not token or not user:
+        response_payload["persistence"] = {
+            "saved": False,
+            "requires_sign_in": True,
+            "message": "Sign in before running an analysis to save it to My Runs.",
+        }
+        return
+    try:
+        saved = supabase_auth.persist_product_analysis(
+            access_token=token,
+            request_payload=request_payload,
+            response_payload=response_payload,
+        )
+        response_payload["persistence"] = {
+            "saved": True,
+            "run_id": saved["run_id"],
+            "already_saved": bool(saved.get("already_saved")),
+            "message": "Analysis saved to your account.",
+        }
+        response_payload["run"]["saved_run_id"] = saved["run_id"]
+    except (supabase_auth.SupabaseAPIError, ValueError, TypeError):
+        response_payload["persistence"] = {
+            "saved": False,
+            "requires_sign_in": False,
+            "message": "The analysis completed, but saving it to your account failed. Retry the analysis while signed in.",
+        }
+
+
+@app.get("/api/auth/config")
+def auth_config() -> dict[str, Any]:
+    config = supabase_auth.settings()
+    return {
+        "configured": bool(config["configured"]),
+        "url": config["url"],
+        "publishable_key": config["publishable_key"],
+        "provider": "email_magic_link",
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request) -> dict[str, Any]:
+    _, user = _auth_context(request)
+    return {"user": user}
+
+
+@app.get("/api/account/runs")
+def account_runs(request: Request) -> dict[str, Any]:
+    token, user = _auth_context(request)
+    try:
+        rows = supabase_auth.rest_select(
+            "analysis_runs",
+            access_token=str(token),
+            filters={
+                "select": "id,created_at,updated_at,requested_start,requested_end,status,stage,progress_percent,status_message,engine_version",
+                "user_id": f"eq.{user['id']}",
+                "order": "created_at.desc",
+                "limit": "50",
+            },
+        )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"runs": rows if isinstance(rows, list) else []}
+
+
+@app.get("/api/account/runs/{run_id}")
+def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
+    import uuid
+
+    try:
+        safe_run_id = str(uuid.UUID(run_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=404, detail="Saved analysis not found.") from exc
+    token, user = _auth_context(request)
+    try:
+        run_rows = supabase_auth.rest_select(
+            "analysis_runs",
+            access_token=str(token),
+            filters={
+                "select": "*",
+                "id": f"eq.{safe_run_id}",
+                "user_id": f"eq.{user['id']}",
+                "limit": "1",
+            },
+        )
+        if not isinstance(run_rows, list) or not run_rows:
+            raise HTTPException(status_code=404, detail="Saved analysis not found.")
+        sources = supabase_auth.rest_select(
+            "analysis_run_sources",
+            access_token=str(token),
+            filters={
+                "select": "*",
+                "run_id": f"eq.{safe_run_id}",
+                "order": "created_at.asc",
+            },
+        )
+        results = supabase_auth.rest_select(
+            "analysis_results",
+            access_token=str(token),
+            filters={
+                "select": "*",
+                "run_id": f"eq.{safe_run_id}",
+                "order": "revision.desc",
+            },
+        )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    result_rows = results if isinstance(results, list) else []
+    return {
+        "run": run_rows[0],
+        "sources": sources if isinstance(sources, list) else [],
+        "results": result_rows,
+        "latest_result": result_rows[0] if result_rows else None,
+    }
 
 
 @app.get("/health")
@@ -179,9 +317,23 @@ def field_preview(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/api/analysis/run")
-def analysis_run(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def analysis_run(payload: dict[str, Any] | None = None, request: Request = None) -> dict[str, Any]:
     try:
-        return create_analysis(payload or {})
+        body = payload or {}
+        if request is not None:
+            token = supabase_auth.bearer_token(request.headers.get("authorization"))
+            if token:
+                try:
+                    supabase_auth.get_user(token)
+                except supabase_auth.SupabaseAPIError as exc:
+                    status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+                    raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        response = create_analysis(body)
+        if request is not None:
+            _persist_authenticated_response(request, body, response)
+        return response
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -225,9 +377,21 @@ def analysis_evidence(run_id: str, evidence_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/analysis/{run_id}/what-if")
-def analysis_what_if(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def analysis_what_if(run_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     try:
-        return what_if(run_id, payload)
+        token = supabase_auth.bearer_token(request.headers.get("authorization"))
+        if token:
+            try:
+                supabase_auth.get_user(token)
+            except supabase_auth.SupabaseAPIError as exc:
+                status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        response = what_if(run_id, payload)
+        if token:
+            _persist_authenticated_response(request, payload, response)
+        return response
+    except HTTPException:
+        raise
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown analysis") from exc
     except ValueError as exc:
