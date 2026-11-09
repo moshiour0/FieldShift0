@@ -13,7 +13,9 @@ This file is the continuity document for the implementation. A new assistant/ses
 
 ### Current verified repository state
 
-- Latest branch head at handoff: a5e27f48073c52891b994849aa03a13f33d2c025.
+- Pre-implementation baseline branch head: a5e27f48073c52891b994849aa03a13f33d2c025.
+- First implementation commit: d2d3d0f8fef6c4ecb1ef1e5041c5e3fd4b4ca19a.
+- Current branch head for this handoff update: pending the compatibility-test follow-up commit.
 - PR #1: https://github.com/moshiour0/FieldShift0/pull/1
 - PR state at last check: open=true, draft=true, merged=false.
 - Latest completed strict Drive verification run: #2, run ID 42576819439.
@@ -212,6 +214,27 @@ Security requirements:
 - Never use user-editable user_metadata as an authorization source.
 
 **Important deployment blocker:** At the last inspection, the available Supabase connection listed no FieldShift0/KrishiNexus project. It listed SARGuardian_Dynamic and SARGuardian-Monorepo plus unrelated projects. The Vercel field-shift0 project's environment variable list contained the four Google Drive secrets and NASA/GEE settings but no SUPABASE_URL, SUPABASE_ANON_KEY/SUPABASE_PUBLISHABLE_KEY, SUPABASE_SERVICE_ROLE_KEY, or FieldShift database DSN. Do not apply this migration to any SARGuardian project. First identify/create the correct FieldShift Supabase project and add the intended variables to Vercel Preview before Production.
+
+
+### First implementation slice (2026-11-09)
+
+Commit d2d3d0f8fef6c4ecb1ef1e5041c5e3fd4b4ca19a added:
+- docs/v3/PERSISTENT_ANALYSIS_ROADMAP.md — this continuity roadmap.
+- supabase/migrations/20261109090000_persistent_analysis_runs.sql — proposed tables and owner-scoped RLS policies; not applied to a hosted database.
+- src/fieldshift/v3/run_lifecycle.py — core-weather readiness and final/preliminary status classifier.
+- tests_v3/test_run_lifecycle.py — six lifecycle policy tests.
+- product.py now returns status_message, is_final, prediction_eligible, core_data_ready, pending_sources, gap_sources, and missing_required_sources.
+- index.html now renders a run-readiness banner in the evidence section.
+
+CI follow-up:
+- Run #186 / 42579715675 initially failed because tests/test_learning_lab_contract.py still expected only the legacy values complete/pending.
+- The pytest run reported 126 passed, 1 failed. The failure is the stale assertion in the learning-lab contract test, not a lifecycle-classifier failure.
+- The assertion is being updated to the new contract: when live NASA is explicitly disabled and required POWER weather is not ready, the run must be preliminary_ready, is_final=false, and prediction_eligible=false.
+- Re-run both Python 3.11 and 3.12, Ruff, mypy, and compileall after the compatibility-test change.
+
+Infrastructure verification:
+- Vercel Preview for commit d2d3d0f8fef6c4ecb1ef1e5041c5e3fd4b4ca19a reached READY at https://field-shift0-qugdka886.vercel.app.
+- The available Supabase account connection has no FieldShift project. Vercel project field-shift0 currently has Google Drive/NASA/GEE variables but no SUPABASE_* variables. Do not apply the SQL migration or wire auth until the correct FieldShift Supabase project is selected.
 
 ## 5. Implementation phases and acceptance criteria
 

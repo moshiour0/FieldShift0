@@ -81,7 +81,9 @@ def test_learning_lab_analysis_submit_returns_live_v3_strategies(monkeypatch) ->
     assert response.status_code == 200, response.text
     result = response.json()
     assert result["run"]["mode"] == "live"
-    assert result["run"]["status"] in {"complete", "pending"}
+    assert result["run"]["status"] == "preliminary_ready"
+    assert result["run"]["is_final"] is False
+    assert result["run"]["prediction_eligible"] is False
     assert result["field"]["location"]["lat"] == 24.75
     assert result["field"]["area_ha"] == 0.4
     assert result["strategies"]
