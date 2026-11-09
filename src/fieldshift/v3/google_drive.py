@@ -65,17 +65,23 @@ def _request(
                 return response.read(), dict(response.headers.items())
         except urllib.error.HTTPError as exc:
             payload = exc.read()
-            if exc.code in {429, 500, 502, 503, 504} and attempt < 4:
+            detail = ""
+            try:
+                decoded = json.loads(payload.decode("utf-8"))
+                error_value = decoded.get("error", {})
+                detail = str(error_value.get("message", ""))[:240]
+                reason = str(error_value.get("status", "")) + " " + detail
+            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                reason = ""
+            rate_limited = exc.code == 403 and any(
+                marker in reason.lower()
+                for marker in ("ratelimitexceeded", "userratelimitexceeded", "rate limit exceeded", "too many requests")
+            )
+            if (exc.code in {429, 500, 502, 503, 504} or rate_limited) and attempt < 4:
                 time.sleep(min(32.0, (2**attempt) + random.random()))
                 continue
             if exc.code == 404:
                 raise GoogleDriveNotFound("Google Drive archive object not found") from exc
-            detail = ""
-            try:
-                decoded = json.loads(payload.decode("utf-8"))
-                detail = str(decoded.get("error", {}).get("message", ""))[:240]
-            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-                pass
             raise GoogleDriveError(f"Google Drive API HTTP {exc.code}: {detail}".rstrip()) from exc
         except urllib.error.URLError as exc:
             last_error = exc
@@ -265,23 +271,51 @@ def _upload(
     metadata: dict[str, Any] = {"name": name, "mimeType": "application/json"}
     if file_id is None:
         metadata["parents"] = [parent_id]
-    boundary = f"fieldshift_{uuid.uuid4().hex}"
-    metadata_bytes = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
-    body = (
-        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode("ascii")
-        + metadata_bytes
-        + f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode("ascii")
-        + content
-        + f"\r\n--{boundary}--\r\n".encode("ascii")
-    )
     path = "files" if file_id is None else f"files/{urllib.parse.quote(file_id, safe='')}"
     method = "POST" if file_id is None else "PATCH"
-    raw, _ = _auth_request(
-        method,
-        _url(path, {"uploadType": "multipart", "fields": "id,name,size,md5Checksum"}, upload=True),
-        body=body,
-        headers={"Content-Type": f"multipart/related; boundary={boundary}"},
-    )
+    fields = "id,name,size,md5Checksum"
+    if len(content) > 5 * 1024 * 1024:
+        # Google recommends resumable sessions for files over 5 MB. Use a
+        # single complete media PUT for our archive objects; the session URI
+        # lets Drive safely identify/retry the upload if the response is lost.
+        _, response_headers = _auth_request(
+            method,
+            _url(path, {"uploadType": "resumable", "fields": fields}, upload=True),
+            body=json.dumps(metadata, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Type": "application/json",
+                "X-Upload-Content-Length": str(len(content)),
+            },
+        )
+        upload_url = response_headers.get("Location") or response_headers.get("location")
+        if not upload_url:
+            raise GoogleDriveError("Google Drive did not return a resumable upload URL")
+        raw, _ = _auth_request(
+            "PUT",
+            upload_url,
+            body=content,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(len(content)),
+            },
+        )
+    else:
+        boundary = f"fieldshift_{uuid.uuid4().hex}"
+        metadata_bytes = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+        body = (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode("ascii")
+            + metadata_bytes
+            + f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode("ascii")
+            + content
+            + f"\r\n--{boundary}--\r\n".encode("ascii")
+        )
+        raw, _ = _auth_request(
+            method,
+            _url(path, {"uploadType": "multipart", "fields": fields}, upload=True),
+            body=body,
+            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+        )
     try:
         result = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
