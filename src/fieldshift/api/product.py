@@ -225,6 +225,7 @@ def _evidence_state(lineage: list[dict[str, Any]], remote_coverage: float) -> di
             "fallback": record.get("fallback"),
             "error": record.get("error"),
             "retry_after_seconds": record.get("retry_after_seconds"),
+            "provider_task_id": record.get("provider_task_id") or record.get("task_id"),
             "request_stage": record.get("request_stage"),
             "http_status": record.get("http_status"),
             "setup_hint": record.get("setup_hint"),
