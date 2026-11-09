@@ -418,8 +418,8 @@ def smap_daily_point_timeseries(
     # different user-selected date windows for the same exact point.
     chunks: list[tuple[date, date]] = []
     for year in range(start.year, end.year + 1):
-        chunk_start = max(start, date(year, 1, 1), date(2015, 3, 31))
-        chunk_end = min(end, date(year, 12, 31), date.today())
+        chunk_start = max(date(year, 1, 1), date(2015, 3, 31))
+        chunk_end = min(date(year, 12, 31), date.today())
         if chunk_start <= chunk_end:
             chunks.append((chunk_start, chunk_end))
 
