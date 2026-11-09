@@ -220,11 +220,11 @@ def _folder(parent_id: str, name: str, *, create: bool) -> str | None:
         "files",
         payload={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
     )
-    folder_id = payload.get("id")
-    if not folder_id:
+    created_folder_id = payload.get("id")
+    if not created_folder_id:
         raise GoogleDriveError(f"Google Drive did not return the {name!r} folder ID")
-    _FOLDER_IDS[cache_key] = str(folder_id)
-    return str(folder_id)
+    _FOLDER_IDS[cache_key] = str(created_folder_id)
+    return str(created_folder_id)
 
 
 def _resolve_parent(parts: list[str], *, create: bool) -> str | None:
