@@ -24,17 +24,18 @@ class WorkerAPIError(RuntimeError):
         self.status_code = status_code
 
 
-def _settings(worker_token_override: str | None = None) -> tuple[str, str, str]:
+def _settings(worker_token_override: str | None = None) -> tuple[str, str, str, str]:
     base_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+    anon_jwt = os.getenv("SUPABASE_ANON_KEY", "").strip()
     worker_token = (
         worker_token_override
         or os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
         or os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip()
     )
-    if not base_url or not publishable_key or len(worker_token) < 48:
+    if not base_url or not publishable_key or not anon_jwt or len(worker_token) < 48:
         raise WorkerAPIError("The scheduled analysis worker is not configured.")
-    return base_url, publishable_key, worker_token
+    return base_url, publishable_key, anon_jwt, worker_token
 
 
 def _rest_json(
@@ -46,7 +47,7 @@ def _rest_json(
     timeout: int = 20,
     worker_token: str | None = None,
 ) -> Any:
-    base_url, publishable_key, worker_token = _settings(worker_token)
+    base_url, publishable_key, anon_jwt, worker_token = _settings(worker_token)
     url = f"{base_url}/rest/v1/{path.lstrip('/')}"
     if query:
         url = f"{url}?{query}"
@@ -59,6 +60,7 @@ def _rest_json(
             # The publishable key identifies the project. With no user JWT,
             # PostgREST applies the anon role and the token-gated worker RLS.
             "apikey": publishable_key,
+            "Authorization": f"Bearer {anon_jwt}",
             "x-fieldshift-worker": worker_token,
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -252,7 +254,7 @@ def _fail_job(job_id: str, attempts: int, exc: Exception, worker_token: str) -> 
 
 def process_one(worker_token: str | None = None) -> dict[str, Any]:
     """Claim and process at most one job; safe to call from a scheduled HTTP route."""
-    configured_token = _settings(worker_token)[2]
+    configured_token = _settings(worker_token)[3]
     job = _claim_job(configured_token)
     if job is None:
         return {"processed": False, "message": "No queued analysis job is ready."}
