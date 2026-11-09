@@ -254,6 +254,102 @@ def test_earth_engine_graphs_build_with_official_python_client(monkeypatch, tmp_
         case.tearDown()
 
 
+
+def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path):
+    import ee
+    import ee.apitestcase
+
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        monkeypatch.setattr(gee.google_drive, "configured", lambda: False)
+        graphs = []
+
+        def compute(expression):
+            graphs.append(json.dumps(ee.serializer.encode(expression)))
+            return {
+                "features": [
+                    {"properties": {
+                        "date": "2025-01-01", "sm_surface": 0.24,
+                        "sm_rootzone": 0.31, "n_intervals": 8,
+                    }},
+                    {"properties": {
+                        "date": "2025-01-02", "sm_surface": 0.28,
+                        "sm_rootzone": 0.35, "n_intervals": 7,
+                    }},
+                ]
+            }
+
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        result = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 2), tmp_path)
+
+        assert result.status == "partial"
+        assert result.coverage_fraction == 0.5
+        assert len(result.rows) == 1
+        assert result.rows[0].smap_surface_m3_m3 == pytest.approx(0.24)
+        assert result.rows[0].smap_rootzone_m3_m3 == pytest.approx(0.31)
+        assert "eight" in result.rows[0].provenance.temporal_resolution
+        assert len(graphs) == 1
+    finally:
+        case.tearDown()
+
+
+def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, tmp_path):
+    import hashlib
+    import ee
+    import ee.apitestcase
+
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    objects: dict[str, bytes] = {}
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        monkeypatch.setattr(gee.google_drive, "configured", lambda: True)
+        monkeypatch.setattr(gee.google_drive, "get_object", lambda key: objects.get(key))
+
+        def put_object(key: str, content: bytes, *, sha256: str | None = None, mime_type: str = "application/json"):
+            assert sha256 == hashlib.sha256(content).hexdigest()
+            objects[key] = content
+            return {"id": key}
+
+        monkeypatch.setattr(gee.google_drive, "put_object", put_object)
+        calls = []
+
+        def compute(expression):
+            calls.append(ee.serializer.encode(expression))
+            return {"features": [{
+                "properties": {
+                    "date": "2025-01-01", "sm_surface": 0.27,
+                    "sm_rootzone": 0.36, "n_intervals": 8,
+                }
+            }]}
+
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        first = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 1), tmp_path / "first")
+        assert first.status == "available"
+        assert first.archive_cache_status == "verified"
+        assert first.archive_sha256
+        assert len(objects) == 1
+
+        def no_earth_engine():
+            raise AssertionError("A verified shared SMAP cache hit must not query Earth Engine")
+
+        monkeypatch.setattr(gee, "_initialise_ee", no_earth_engine)
+        second = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 1), tmp_path / "cold")
+        assert second.status == "available"
+        assert second.retrieval_mode == "google_drive_cache"
+        assert second.archive_cache_status == "verified"
+        assert second.rows[0].smap_surface_m3_m3 == pytest.approx(0.27)
+        assert len(calls) == 1
+    finally:
+        case.tearDown()
+
+
 def test_nex_pending_can_resume_cached_months(monkeypatch, tmp_path):
     monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
     monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
