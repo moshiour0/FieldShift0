@@ -626,3 +626,72 @@ This update supersedes the paused-scheduler deployment boundary in Section 12 be
 - The earlier 10:00 UTC dispatch had one intermittent pg_net `HTTP2 framing layer` transport error; the 10:05 scheduled retry succeeded. The separate manual branch-alias and deployment-host checks also returned HTTP 200.
 - No real user run was queued at this time, so the scheduled worker correctly returned `processed=false`. A real NASA source acquisition/retry/result revision has not yet been observed end-to-end.
 - The single `fieldshift-analysis-worker` schedule remains active at `*/5 * * * *`; no duplicate schedule is present.
+
+
+---
+
+## 14. Real queued-run execution probe and explicit AppEEARS task resume — 2026-11-09
+
+### Live Preview worker execution probe
+
+A controlled temporary owner/run was submitted through the authenticated queue RPC and processed by the deployed Preview worker (deployment commit `2f97e4245354d36abd5c7c90fe187c62a2951de2`).
+
+Request window: 2026-06-20 through 2026-06-30, inclusive; Mymensingh pilot coordinates; 0.4 ha; reduced Monte Carlo sample counts for the probe.
+
+Observed worker response from pg_net HTTP response ID 14:
+
+- HTTP 200, `ok=true`, `processed=true`.
+- Worker claimed one `build_result` job (attempt 1) and ran the FieldShift V3 engine.
+- Saved result revision 1, result kind `preliminary`.
+- Run status `waiting_for_data`, stage `waiting_for_datasets`, progress 75, `completed_at=NULL`.
+- Job status `retrying`, next retry `2026-11-09 10:28:46 UTC`.
+- One `analysis_revision_created` event was recorded from `queued` to `waiting_for_data`.
+
+Observed source provenance for the 11-day probe:
+
+- NASA POWER Daily weather: 11 daily live records (2026-06-20 to 2026-06-30), required core source available.
+- NASA GPM IMERG V07: 11 daily point observations, available.
+- NASA NEX-GDDP-CMIP6 SSP245/SSP585: 12 monthly climate signals per scenario through Google Earth Engine, available as modeled climate signals.
+- NASA SMAP, NASA HLS and NASA MODIS MOD16: AppEEARS tasks were pending; no values were substituted.
+- SoilGrids remained not configured; the Mymensingh soil profile was a labelled pilot fallback.
+- Weather outside the observation window was explicitly labelled synthetic extension; it was not represented as observed weather.
+
+This is an actual queued Preview worker execution, not just an idle-route ping. It verifies request acceptance, durable claim, engine execution, result revision, status/event writes and retry scheduling. It does **not** establish a final decision-ready result, nor does it yet prove a later provider-completion retry produced a second revision.
+
+### Temporary probe cleanup
+
+- The probe used a synthetic `.invalid` email identity, not a real user account.
+- Its run, job, source rows, result revision, event and auth user were deleted immediately after inspection.
+- Follow-up SQL returned zero for the probe user, run, job, source, result and event counts. No test analysis data was retained.
+
+### Explicit provider task-ID persistence added to the Draft PR
+
+The real probe revealed that AppEEARS returned pending SMAP/HLS/MODIS tasks with `retry_after_seconds`, but those task IDs were not being propagated from the adapter into the saved evidence records. The adapter had an account-task-list fallback, but the durable worker did not persist and reload the exact provider task identifier.
+
+The current Draft PR head now closes that gap:
+
+- `appeears_point_timeseries` exposes a pending task's `provider_task_id`.
+- `_evidence_state` preserves the identifier in the product evidence item.
+- Worker source persistence writes the identifier to `analysis_run_sources.provider_task_id`.
+- Before a retry, the worker queries source task IDs under its active run lease and injects them as internal execution metadata. The immutable farmer request snapshot is not modified.
+- The V3 pipeline passes saved identifiers into AppEEARS. The adapter checks the exact persisted task first; a missing/expired ID falls back to the existing account task-list lookup before it can submit another task.
+- Added cold-instance resume coverage verifies that a new AppEEARS invocation can complete using only the saved task IDs and does not submit duplicate tasks.
+- Added worker tests verify that persisted IDs are loaded under the active worker context and passed to the engine without mutating the saved user request.
+
+### Latest code verification and deployment gate
+
+- Current code commit at this section's creation: `1cb42f9477f7a7600532ab2e2bc714210e0b4be2`.
+- Python 3.11 and 3.12: **153 passed, 1 existing Starlette/httpx TestClient deprecation warning** each; Ruff, compileall and mypy pass (34 source files).
+- The current READY Vercel Preview is still the older deployment `dpl_EW33d9RLejMcU2iJneCZJJaQQEvy`, commit `5886df8bee798aada53de9a450a24952a294b504`. It contains pending-task ID exposure but predates the explicit DB → worker → pipeline task-ID reload code.
+- A deployment request for the current source commit was rejected by Vercel with HTTP 402 `api-deployments-free-per-day` and `retry-after: 86400`. The mapped Vercel CLI fallback is not installed in this execution environment. No alternate deployment mechanism was used to bypass the limit. No billing/plan setting was changed.
+- Consequently, the explicit task-ID reload code is CI-verified but **not yet deployed or live-smoke-tested**. Do not treat it as active in the current Preview until a READY deployment matches the current branch head and a worker retry proves the same stored AppEEARS task IDs are reused.
+- The one canonical five-minute Supabase schedule remains active and the old Preview worker responds to the idle endpoint. The temporary queue is gone, so it has no test job to process.
+- PR #1 remains Draft/Open/Unmerged. Production, Production env vars, and the unrelated SARGuardian-Monorepo project remain unchanged.
+
+### Remaining acceptance gates
+
+1. Obtain one fresh Preview deployment after the Vercel deployment limit is resolved; verify its commit SHA equals the current PR head.
+2. Re-run a controlled AppEEARS-backed queue probe and verify that the first worker revision stores non-empty `provider_task_id` values for pending NASA SMAP/HLS/MODIS sources.
+3. Re-trigger the same run after its retry delay. Confirm the worker loads those exact IDs, queries those exact AppEEARS tasks, and does not submit duplicate tasks; then verify revision 2 and updated source/event state.
+4. Test a real Magic Link owner sign-in, refresh, sign-out/sign-in, and two-account isolation after adding the branch Preview URL to the Supabase Auth redirect allowlist. A custom SMTP provider is still needed before public sign-ups.
+5. Keep PR #1 Draft/Open/Unmerged and Production unchanged until explicit release approval.
