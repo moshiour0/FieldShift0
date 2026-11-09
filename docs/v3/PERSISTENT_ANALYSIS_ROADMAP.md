@@ -463,3 +463,88 @@ They are not set for Production. The publishable key is browser-safe; no secret/
 - Integrate the verified Drive archive into run retrieval/cache checks.
 - Add two-user RLS isolation tests against this project and end-to-end sign-in/resume tests.
 - Keep PR #1 Draft/Open/Unmerged and Production unchanged until the user explicitly authorizes release.
+
+
+## 12. Authenticated accounts and saved-run persistence — 2026-11-09
+
+### Implementation
+
+- Current implementation commit before this roadmap update: `61bf3c580b528020540f1c393e668f0e97478a68`.
+- Added `src/fieldshift/api/supabase_auth.py`:
+  - Uses only `SUPABASE_URL` plus `SUPABASE_PUBLISHABLE_KEY` (legacy anon key fallback).
+  - Validates every supplied access token by calling Supabase Auth `/auth/v1/user`; the API never trusts a user ID supplied by the browser.
+  - Uses the caller's access token for PostgREST RPC/reads, so the caller remains subject to RLS. No service-role/secret key is used or exposed.
+  - Persists exact request snapshot, source statuses/quality/provenance, result payload, evidence fingerprint and run event.
+- Added API routes:
+  - `GET /api/auth/config` — public-safe Supabase URL and publishable-key configuration only.
+  - `GET /api/auth/me` — server-validated signed-in identity.
+  - `GET /api/account/runs` — current user's saved run list.
+  - `GET /api/account/runs/{run_id}` — owner-scoped run, source records and versioned results.
+- `POST /api/analysis/run` persists completed analyses when a valid signed-in user token is present. Guests can still use the public demo/analysis flow, but guest analyses are not account-persistent.
+- `POST /api/analysis/{run_id}/what-if` also saves the what-if result for signed-in users.
+- Frontend adds passwordless email Magic Link sign-in, local session persistence/refresh, sign out, My Runs list/detail, saved result restore, and client-generated idempotency keys.
+- The current app only exposes Email Magic Link sign-in; Google OAuth is not enabled/configured.
+
+### Additional database migrations
+
+1. `20261109133000_authenticated_analysis_persistence.sql` — owner-scoped INSERT policies and the `SECURITY INVOKER` RPC `public.save_completed_analysis(jsonb,jsonb,jsonb)`.
+2. `20261109134500_authenticated_events_sequence.sql` — authenticated sequence usage for append-only event inserts.
+3. `20261109143000_revision_aware_analysis_saves.sql` — owner-scoped lifecycle/source/result-current-marker updates and evidence revision handling.
+
+Migration history confirmed on project `bipyrlegaxmhwzwrmcmi`:
+- `persistent_analysis_runs`
+- `private_worker_tables_and_fk_indexes`
+- `private_backend_rls_policies`
+- `authenticated_analysis_persistence`
+- `authenticated_events_sequence`
+- `revision_aware_analysis_saves`
+
+### Security and database tests
+
+- Security Advisor: no findings after the new Auth/persistence migrations.
+- Health Advisor: no findings.
+- Performance Advisor: only INFO-level unused-index notices on this still-empty application database.
+- Executed a transaction-scoped RLS integration probe under the `authenticated` role:
+  - Owner A saved one preliminary result.
+  - Same idempotency key plus changed evidence produced revision 2, updated source status, and transitioned run status from `preliminary_ready` to `final_ready`.
+  - Exactly one result row was marked current.
+  - Two lifecycle events were recorded.
+  - The transaction was rolled back; test user/run data were not retained.
+- Executed a second transaction-scoped ownership test:
+  - User A created a run with source/result/event rows.
+  - User B then queried those records under their own JWT claims.
+  - RLS returned 0 run, source, result and event rows to User B.
+  - This transaction was also rolled back.
+- GitHub Actions for commit `61bf3c580b528020540f1c393e668f0e97478a68`: push and PR runs succeeded.
+- Python 3.11 and 3.12: 135 passed, 1 existing Starlette/httpx TestClient deprecation warning; Ruff, compileall and mypy passed (33 source files).
+
+### Preview deployment and Auth activation requirements
+
+- Vercel Preview for commit `61bf3c580b528020540f1c393e668f0e97478a68`: READY at https://field-shift0-qt6xckc1v.vercel.app.
+- `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` exist only in Preview for `feat/krishinexus-real-data-school-lab`.
+- Production environment and Production deployment were not modified.
+- Live runtime HTTP smoke test could not be completed from the current execution environment because the preview hostname did not resolve through its available network path. Vercel confirmed the exact deployment state as READY; this is not a claim that end-user login email was tested.
+- Before a Magic Link can return to this Vercel Preview, add the following redirect pattern in Supabase Auth → URL Configuration:
+  - `https://field-shift0-*.vercel.app/**`
+  - Current exact Preview URL: `https://field-shift0-qt6xckc1v.vercel.app/**`
+- Supabase's default email sender is restricted to organization members. That is suitable for an initial owner test if the email belongs to the organization, but public sign-ups require a configured custom SMTP provider. No SMTP credentials were provided or configured. See Supabase's [email provider changelog](https://supabase.com/changelog?tags=auth) and [redirect URL guide](https://supabase.com/docs/guides/auth/redirect-urls).
+- No user account was created during the database RLS probes. End-to-end Magic Link deliverability and browser session callback remain unverified until the redirect allowlist is set and an actual email is opened.
+
+### Important boundary: what is and is not durable yet
+
+- **Completed authenticated analyses** now persist in Supabase and can be reopened through My Runs after a fresh sign-in/session.
+- Repeated checks with the same client request ID append a new immutable result revision when the evidence fingerprint or run status changes. Identical submissions are idempotent.
+- The current `POST /api/analysis/run` still performs the scientific computation synchronously before the persistence RPC is called. It is not yet a queued background execution.
+- The private `analysis_run_jobs` table is provisioned but no source-specific worker has been connected to it. Closing the browser during an upstream pending-data window does not yet guarantee autonomous provider polling; the existing frontend refresh path remains.
+- The verified Google Drive archive is not yet wired into the new run persistence/cache resolver.
+- Until the durable worker and archive recovery phase is complete, do not claim that pending provider tasks continue independently for days or that all delayed datasets are automatically fetched after a user closes the page.
+
+### Next implementation phases
+
+1. Complete Preview Auth activation: add the redirect allowlist, then test a real owner Magic Link, refresh, sign-out, and sign-in again. Configure custom SMTP before opening sign-up to public users.
+2. Run a real two-account end-to-end test through the deployed browser UI: create a completed analysis as User A, sign out, sign in as User B and confirm the run is absent, then sign back in as User A and restore it.
+3. Add pre-execution durable run acceptance and enqueue source-specific jobs; do not wait until synchronous analysis completion to save the request snapshot.
+4. Implement a durable worker with lease/claim, provider task reuse, bounded retries, Retry-After support, failed-product-only retry, and final reconciliation.
+5. Wire verified Google Drive cache/archive lookup into source retrieval; verify checksums and exact spatial/time/product/QA compatibility before reusing cached data.
+6. Complete delayed-data/revision tests with provider mocks and a true close-tab/reopen end-to-end test.
+7. Keep PR #1 Draft/Open/Unmerged and Production unchanged until explicit user release approval.
