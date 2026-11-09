@@ -392,6 +392,7 @@ def _run_engine(payload: dict[str, Any]) -> dict[str, Any]:
         field_override=field,
         start_date=payload.get("start_date"),
         end_date=payload.get("end_date"),
+        provider_task_ids=payload.get("_provider_task_ids"),
     )
     data = _engine_run_to_dict(result)
     data["run_id"] = f"run_{uuid.uuid4().hex[:12]}"
