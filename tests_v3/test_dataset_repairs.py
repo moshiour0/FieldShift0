@@ -356,11 +356,11 @@ def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path
                 "features": [
                     {"properties": {
                         "date": "2025-01-01", "sm_surface": 0.24,
-                        "sm_rootzone": 0.31, "n_intervals": 8,
+                        "sm_rootzone": 0.31, "n_surface": 8, "n_rootzone": 8,
                     }},
                     {"properties": {
                         "date": "2025-01-02", "sm_surface": 0.28,
-                        "sm_rootzone": 0.35, "n_intervals": 7,
+                        "sm_rootzone": 0.35, "n_surface": 8, "n_rootzone": 7,
                     }},
                 ]
             }
@@ -407,7 +407,7 @@ def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, 
             return {"features": [{
                 "properties": {
                     "date": "2025-01-01", "sm_surface": 0.27,
-                    "sm_rootzone": 0.36, "n_intervals": 8,
+                    "sm_rootzone": 0.36, "n_surface": 8, "n_rootzone": 8,
                 }
             }]}
 
