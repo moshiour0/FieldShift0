@@ -93,6 +93,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 </div></section>
 
 <section class="section" id="evidence-section"><div class="container">
+  <div id="run-readiness" class="state-card hidden" role="status" style="margin-bottom:12px"><div><strong id="run-readiness-title">Run status</strong><p id="run-readiness-message" class="small">Checking evidence readiness.</p></div></div>
   <div id="pending-evidence" class="state-card hidden" role="status" style="margin-bottom:16px"><div><strong>NASA data checks are continuing</strong><p id="pending-message" class="small">Available results are shown while pending sources are checked.</p><div class="section-tools"><button class="secondary" id="refresh-evidence" onclick="refreshPendingEvidence()">Check now</button><button class="ghost" id="stop-refresh" onclick="stopEvidenceRefresh()">Stop automatic checks</button></div></div></div>
   <p id="evidence-window" class="small muted"></p>
   <div class="section-head"><div><span class="eyebrow">02 · Field evidence</span><h2>See the field context before the ranking.</h2><p>Evidence state comes first; modeled signals below are explicitly tied to the leading baseline strategy, not presented as raw observations.</p></div><div id="qualityBadge" class="badge warn">Evidence state: awaiting analysis</div></div>
@@ -235,7 +236,7 @@ async function submitAnalysis(payload,isRefresh=false){
     if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:'Analysis failed');
     if(version!==state.pollVersion)return;
     applyData(d);scheduleEvidenceRefresh(d,version);
-    if(!isRefresh){scrollToId('evidence-section');toast(d.run.status==='pending'?'Analysis ready; some NASA data is still processing':'Analysis complete')}
+    if(!isRefresh){scrollToId('evidence-section');toast(d.run.status==='preliminary_ready'?'Preliminary result only; review data readiness':d.run.status==='final_with_gaps'?'Result ready with data gaps; review source coverage':'Analysis complete')}
   }catch(e){toast(e.message);if(isRefresh)qs('#pending-message').textContent=`${e.message} Use Check now to try again.`}
   finally{state.analysisBusy=false;qs('#refresh-evidence').disabled=Date.now()<state.retryNotBefore;clearBusy()}
 }
@@ -274,7 +275,21 @@ async function runWhatIf(scenario){
 
 function showBusy(text){qs('#qualityBadge').textContent=text;qs('#qualityBadge').className='badge warn'}
 function clearBusy(){if(state.data)renderQuality()}
-function applyData(data){state.data=data;const window=data.run.evidence_window;qs('#evidence-window').textContent=window?.start_date?`Requested observations: ${window.start_date} to ${window.end_date} (inclusive). Crop plan: ${window.plan_start_year}–${window.plan_end_year}.`:'Demo snapshot — choose a date range and Run analysis for a new request.';state.activeScenario='baseline';renderQuality();renderSnapshot();renderEvidence();renderPrioritySummary();renderStrategies();renderScenarios();renderExplanation();renderReport();setStep('strategies');setTimeout(()=>setStep('strategies'),0);}
+function applyData(data){state.data=data;renderRunReadiness(data);const window=data.run.evidence_window;qs('#evidence-window').textContent=window?.start_date?`Requested observations: ${window.start_date} to ${window.end_date} (inclusive). Crop plan: ${window.plan_start_year}–${window.plan_end_year}.`:'Demo snapshot — choose a date range and Run analysis for a new request.';state.activeScenario='baseline';renderQuality();renderSnapshot();renderEvidence();renderPrioritySummary();renderStrategies();renderScenarios();renderExplanation();renderReport();setStep('strategies');setTimeout(()=>setStep('strategies'),0);}
+function renderRunReadiness(data){
+  const run=data?.run||{},box=qs('#run-readiness');
+  if(!box)return;
+  const labels={
+    preliminary_ready:['PRELIMINARY RESULT','Some data are still processing or the required core weather input is not ready. This result is not final.'],
+    waiting_for_data:['WAITING FOR DATA','A required dataset is not ready. No final prediction should be used yet.'],
+    final_with_gaps:['FINAL RESULT · DATA GAPS','The core weather input is ready, but one or more supplemental sources are incomplete or unavailable. Review the evidence list.'],
+    final_ready:['FINAL RESULT · VERIFIED INPUTS','Required core evidence and configured/requested sources passed their readiness checks.']
+  };
+  const copy=labels[run.status]||['RUN STATUS',run.status_message||'The run status is being evaluated.'];
+  qs('#run-readiness-title').textContent=copy[0];
+  qs('#run-readiness-message').textContent=run.status_message||copy[1];
+  box.classList.remove('hidden');
+}
 function renderQuality(){const q=state.data?.data_quality||{};const label=q.level==='high'?'Strong evidence':q.level==='moderate'?'Mixed evidence':'Limited evidence';qs('#qualityBadge').textContent=`${label} · ${Math.round((q.coverage_fraction||0)*100)}% supplemental satellite coverage`;qs('#qualityBadge').className=`badge ${q.level==='limited'?'off':q.level==='moderate'?'warn':''}`}
 function metricCard(cls,title,value,unit,copy,progress){return `<div class="metric-card ${cls||''}"><div class="kicker">${title}</div><div class="metric-main"><div class="metric-value">${esc(value)}</div>${unit?`<div class="metric-unit">${esc(unit)}</div>`:''}</div>${Number.isFinite(progress)?`<div class="progress"><i style="width:${Math.round(Math.max(0,Math.min(1,progress))*100)}%"></i></div>`:''}<p>${esc(copy)}</p></div>`}
 function renderSnapshot(){const s=state.data.field_snapshot||{};qs('#snapshotMetrics').innerHTML=metricCard('water','Water pressure',pct(s.water_pressure?.value??0.5),'pressure','Modeled water pressure for the leading baseline strategy.',1-(s.water_pressure?.value??0.5))+metricCard('soil','Soil resilience',pct(s.soil_resilience?.value??0.5),'signal','Modeled soil-resilience signal for the leading baseline strategy.',s.soil_resilience?.value??0)+metricCard('heat','Heat resilience',pct(s.heat_resilience?.value??0.5),'signal','Modeled heat-resilience signal for the leading baseline strategy.',s.heat_resilience?.value??0)+metricCard('','Baseline yield',num(s.yield_kg_ha,0),'kg/ha','Climate-adjusted modeled yield for the leading baseline strategy.',Math.min(1,(s.yield_kg_ha||0)/7000))}

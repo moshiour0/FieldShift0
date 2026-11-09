@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
+from fieldshift.v3.run_lifecycle import classify_run_readiness, source_key_for
 
 ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT = ROOT / "data" / "v3" / "fieldshift_v3_release_run.json"
@@ -212,6 +213,8 @@ def _evidence_state(lineage: list[dict[str, Any]], remote_coverage: float) -> di
         items.append({
             "id": hashlib.sha1(name.encode()).hexdigest()[:10],
             "name": name,
+            "source_key": source_key_for(name),
+            "required": source_key_for(name) in {"nasa_power_daily_weather"},
             "status": status,
             "source_type": source_type,
             "confidence": confidence,
@@ -287,6 +290,7 @@ def _make_product_response(run: dict[str, Any], field: dict[str, Any] | None, *,
     lineage = first_exp.get("data_lineage", [])
     remote_coverage = float((evaluations[0].get("indicators_by_scenario", {}).get("baseline", {}) or {}).get("values", {}).get("remote_observation_coverage_fraction", 0.0))
     evidence = _evidence_state(lineage, remote_coverage)
+    readiness = classify_run_readiness(evidence["items"])
     baseline = evaluations[0].get("indicators_by_scenario", {}).get("baseline", {}).get("values", {})
     water_score = top["dimensions"].get("irrigation_demand", 0.0)
     drought_score = top["dimensions"].get("drought_risk", 0.0)
@@ -305,7 +309,15 @@ def _make_product_response(run: dict[str, Any], field: dict[str, Any] | None, *,
             "engine_version": run.get("engine_version", "3.0.0"),
             "generated_at": run.get("generated_at"),
             "mode": mode,
-            "status": "pending" if any(i["status"] in {"pending", "retrying"} for i in evidence["items"]) else "complete",
+            "status": readiness["status"],
+            "status_message": readiness["status_message"],
+            "is_final": readiness["is_final"],
+            "prediction_eligible": readiness["prediction_eligible"],
+            "core_data_ready": readiness["core_data_ready"],
+            "pending_sources": readiness["pending_sources"],
+            "gap_sources": readiness["gap_sources"],
+            "missing_required_sources": readiness["missing_required_sources"],
+            "required_source_keys": readiness["required_source_keys"],
             "evidence_window": run.get("evidence_window", {}),
         },
         "field": field_ctx,
