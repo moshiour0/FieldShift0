@@ -21,10 +21,16 @@ def test_power_history_backfill_is_manual_gated_and_resumable() -> None:
 
     assert workflow["permissions"]["id-token"] == "write"
     jobs = workflow["jobs"]
-    preflight = jobs["preflight"]["steps"][0]
+    preflight_steps = jobs["preflight"]["steps"]
+    preflight = preflight_steps[0]
     assert "FIELD_SHIFT_ARCHIVE_S3_BUCKET" in preflight["env"]["ARCHIVE_BUCKET"]
     assert "AWS_ROLE_ARN" in preflight["env"]["AWS_ROLE_ARN"]
     assert "No NASA data request was started." in preflight["run"]
+    assert any(step.get("uses") == "aws-actions/configure-aws-credentials@v4" for step in preflight_steps)
+    s3_probe = next(step for step in preflight_steps if step.get("name") == "Verify S3 archive permissions")
+    assert "aws s3api put-object" in s3_probe["run"]
+    assert "aws s3api get-object" in s3_probe["run"]
+    assert "prefetch_history.py" not in s3_probe["run"]
 
     ingest = jobs["ingest"]
     assert ingest["needs"] == "preflight"
