@@ -162,7 +162,7 @@ class TestAnalysisWorker(unittest.TestCase):
                 return_value=("https://fieldshift.example.supabase.co", "publishable", "anon-jwt", "w" * 56),
             ),
             patch("fieldshift.api.analysis_worker._claim_job", return_value={
-                "id": "job-123", "run_id": "run-123", "attempts": 2,
+                "id": "job-123", "run_id": "run-123", "attempts": 5,
             }),
             patch("fieldshift.api.analysis_worker._load_run", return_value={
                 "request_payload": request_payload,
