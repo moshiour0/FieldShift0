@@ -17,6 +17,7 @@ from statistics import mean
 
 from .history import region_by_id
 from .nasa import _cache_write, remote_csv
+from . import google_drive
 
 SOURCES = {
     "smap": {"source": "NASA SMAP", "field": "smap_surface_m3_m3", "unit": "m³/m³",
@@ -39,17 +40,13 @@ def _key(region_id: str, product: str) -> str:
 
 
 def _read_remote(region_id: str, product: str) -> dict | None:
-    bucket = os.getenv("FIELD_SHIFT_ARCHIVE_S3_BUCKET", "").strip()
-    if not bucket:
+    if not google_drive.configured():
         return None
-    import boto3
     try:
-        raw = boto3.client("s3").get_object(Bucket=bucket, Key=_key(region_id, product))["Body"].read()
-        return json.loads(raw)
-    except Exception as exc:
-        if getattr(exc, "response", {}).get("Error", {}).get("Code", "") in {"NoSuchKey", "404"}:
-            return None
-        raise RuntimeError("Satellite curated store is inaccessible") from exc
+        raw = google_drive.get_object(_key(region_id, product))
+        return json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (google_drive.GoogleDriveError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Google Drive satellite curated archive is inaccessible") from exc
 
 
 def satellite_history(region_id: str, product: str) -> dict:
@@ -142,17 +139,18 @@ def import_satellite_csv(*, region_id: str, product: str, filepath: Path, produc
     raw_path = raw_dir / f"{raw_hash}.csv"
     if not raw_path.exists():
         raw_path.write_bytes(file_bytes)
-    bucket = os.getenv("FIELD_SHIFT_ARCHIVE_S3_BUCKET", "").strip()
-    if bucket:
-        import boto3
-        client = boto3.client("s3")
-        client.put_object(Bucket=bucket, Key=f"satellite-raw/{raw_hash}.csv", Body=file_bytes,
-                          ContentType="text/csv", ServerSideEncryption="AES256")
-        client.put_object(Bucket=bucket, Key=_key(region_id, product),
-                          Body=json.dumps(output, ensure_ascii=False, sort_keys=True).encode(),
-                          ContentType="application/json", ServerSideEncryption="AES256")
-    elif os.getenv("VERCEL"):
-        raise RuntimeError("Serverless ingestion requires durable object storage")
+    if os.getenv("VERCEL") and not google_drive.configured():
+        raise RuntimeError("Serverless satellite ingestion requires Google Drive archive configuration")
+    if google_drive.configured():
+        try:
+            google_drive.put_object(f"satellite-raw/{raw_hash}.csv", file_bytes)
+            curated_bytes = json.dumps(output, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            google_drive.put_object(_key(region_id, product), curated_bytes)
+            archived = google_drive.get_object(_key(region_id, product))
+            if archived != curated_bytes:
+                raise RuntimeError("Google Drive satellite archive read-back mismatch")
+        except Exception as exc:
+            raise RuntimeError("Satellite archive could not be published to Google Drive") from exc
     else:
         _cache_write(_base() / "curated" / region_id / f"{product}.json", output)
     return output
