@@ -140,8 +140,24 @@ def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
         raise ValueError("Only completed calendar years can be archived")
     if not refresh:
         try:
-            _, meta = read_year(region_id, year)
-            return {**meta, "retrieval_mode": "archive"}
+            if google_drive.configured():
+                archive_key = f"power-history/{region_id}/{year}.json"
+                remote_payload = google_drive.get_object(archive_key)
+                if remote_payload is not None:
+                    _, meta = read_year(region_id, year)
+                    return {**meta, "retrieval_mode": "google_drive"}
+                if path.exists():
+                    # Migrate a validated local archive instead of downloading
+                    # the same historical year from NASA again.
+                    _, local_meta = read_year(region_id, year)
+                    google_drive.put_object(archive_key, path.read_bytes())
+                    _, remote_meta = read_year(region_id, year)
+                    if remote_meta["sha256"] != local_meta["sha256"]:
+                        raise NasaDataError("Migrated Google Drive archive checksum verification failed")
+                    return {**remote_meta, "retrieval_mode": "local_archive_published"}
+            else:
+                _, meta = read_year(region_id, year)
+                return {**meta, "retrieval_mode": "local_archive"}
         except (OSError, ValueError, KeyError, TypeError):
             pass
     start, end = date(year, 1, 1), date(year, 12, 31)
