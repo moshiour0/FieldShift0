@@ -22,6 +22,23 @@ class TestAPI(unittest.TestCase):
         response = c.get("/api/account/runs")
         self.assertEqual(response.status_code, 401)
 
+    def test_account_runs_uses_the_verified_user_id_as_owner_filter(self):
+        c = TestClient(app)
+        user_id = "2b8e3e0d-7b39-4f73-83b9-90ee5d979fca"
+        with patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            },
+        ), patch("fieldshift.api.app.supabase_auth.get_user", return_value={"id": user_id}), patch(
+            "fieldshift.api.app.supabase_auth.rest_select", return_value=[]
+        ) as rest_select:
+            response = c.get("/api/account/runs", headers={"Authorization": "Bearer test-user-token"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"runs": []})
+        self.assertEqual(rest_select.call_args.kwargs["filters"]["user_id"], f"eq.{user_id}")
+
     def test_auth_config_is_safe_when_not_configured(self):
         c = TestClient(app)
         with patch.dict(os.environ, {"SUPABASE_URL": "", "SUPABASE_PUBLISHABLE_KEY": ""}):
