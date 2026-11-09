@@ -417,6 +417,7 @@ The migration has been applied successfully to the non-production Supabase proje
 - The current PR head at this document update is `ee45e6fda412705955e9ce47e8f9e83538f21eee`. GitHub Actions runs #527 and #528 both completed successfully for this exact SHA; Python 3.11 and 3.12 each report **171 passed, one existing deprecation warning**, and compileall, strict Ruff and mypy (34 source files) pass.
 - PR #1 remains Draft/Open/Unmerged.
 - Runtime-bearing READY Preview: `https://field-shift0-ph1yygjti.vercel.app`, deployment `dpl_AK4hAaoed9BfpKJAdL7CdKYXZKSC`, source commit `55a7a9ca766b1380b4f399bc51def874391cd07c`.
+- Later source changes `e2e68a2...` and `95b4fe4...` improve shared-cache read without a GEE key and allow the pipeline to attempt Drive SMAP cache reuse when GEE credentials are missing. These changes are not included in the existing Preview; the next exact-head Preview remains unbuilt because Vercel's free-plan daily deployment quota check has failed.
 - GitHub compare confirms the four commits after this Preview and up to `ff762cc...` change only the workflow default/preflight, tests, worker comments and documentation. No runtime behavior changes after the Preview's `55a7a9c...` commit. The Preview therefore contains the active pipeline rule that defers SMAP on the first worker pass even when only AppEEARS is configured, and starts live SMAP on the second durable attempt.
 - Protected Preview `GET /api/auth/config` returned HTTP 200 with `configured=true` and provider `email_magic_link`.
 - A safe idle worker probe was submitted from the FieldShift0 Supabase project only after confirming zero non-terminal jobs (`queued`, `retrying`, `running`). The Vault-backed request to `/api/internal/worker/tick` on the `55a7a9c...` Preview returned HTTP 200 with `processed=false` and `No queued analysis job is ready.` No user analysis was processed.
@@ -440,7 +441,7 @@ The migration has been applied successfully to the non-production Supabase proje
 
 ## 8. Implementation sequence
 
-### Phase A — create durable exact-result caching (first engineering change)
+### Phase A — create durable exact-result caching (implemented in current branch; live Drive validation remains)
 
 1. Add a Google Drive-backed completed AppEEARS result cache keyed by product/version, selected layers, exact coordinate or native cell ID, requested/actual date coverage, temporal cadence and QA/processing version.
 2. Keep current local cache as a speed optimization, not source of truth.
@@ -449,7 +450,7 @@ The migration has been applied successfully to the non-production Supabase proje
 5. Never archive a pending/failed task or a product with no usable values.
 6. Add tests for cache hit, cache miss, invalid checksum, Drive outage, exact date-window slicing, product/version mismatch, and no duplicate task POST.
 
-### Phase B — make the first result independent of slow optional SMAP
+### Phase B — make the first result independent of slow optional SMAP (implemented; real NASA run acceptance remains)
 
 1. Inspect the model's actual use of SMAP fields and define a versioned source dependency contract.
 2. Keep NASA POWER as required core weather under the current policy.
@@ -463,7 +464,7 @@ The migration has been applied successfully to the non-production Supabase proje
    - final revision only follows the configured QA/coverage gates;
    - completed HLS/MODIS data are not downloaded again on later worker retries.
 
-### Phase C — SMAP historical spatial archive pilot
+### Phase C — SMAP historical spatial archive (nine-point pilot workflow implemented; national grid archive pending)
 
 1. Commit a verified operational tile geometry covering the intended Bangladesh geography; do not call it official AEZ.
 2. Confirm AppEEARS Area request schema and `SPL4SMGP.008` output format with one small 2025 tile/date test.
