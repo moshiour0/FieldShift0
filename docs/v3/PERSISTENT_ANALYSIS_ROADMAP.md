@@ -614,3 +614,15 @@ This update supersedes the paused-scheduler deployment boundary in Section 12 be
 - Latest CI for the schedule-activation migration commit `3f5b7ccc0e9342f7a922e3342a99b1b5718bf601`: Python 3.11 and 3.12 both report 151 passed and one existing Starlette/httpx deprecation warning; Ruff and mypy pass.
 - PR #1 is still Draft/Open/Unmerged. No Production deployment or Production environment change has been made.
 - The next end-to-end acceptance gate remains a real signed-in user's queued analysis: the worker must claim it, refresh provider evidence, persist a new result revision and event, and leave a retry scheduled while a provider remains pending. Until this is observed, do not claim a real NASA run has completed autonomously.
+
+
+---
+
+## 14. First scheduled HTTP tick verified — 2026-11-09 10:05 UTC
+
+- The 10:05 UTC `fieldshift-analysis-worker` cron execution completed with pg_cron status `succeeded`.
+- The corresponding pg_net response (request ID 12) completed with HTTP 200 and body `{"ok":true,"processed":false,"message":"No queued analysis job is ready."}`.
+- This confirms the automatic five-minute schedule, Vault-sourced worker/protection headers, Vercel branch alias, worker token validation, Supabase API key/JWT role context, and queue claim path work together without a manual request.
+- The earlier 10:00 UTC dispatch had one intermittent pg_net `HTTP2 framing layer` transport error; the 10:05 scheduled retry succeeded. The separate manual branch-alias and deployment-host checks also returned HTTP 200.
+- No real user run was queued at this time, so the scheduled worker correctly returned `processed=false`. A real NASA source acquisition/retry/result revision has not yet been observed end-to-end.
+- The single `fieldshift-analysis-worker` schedule remains active at `*/5 * * * *`; no duplicate schedule is present.
