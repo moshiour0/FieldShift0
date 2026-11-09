@@ -39,6 +39,48 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"runs": []})
         self.assertEqual(rest_select.call_args.kwargs["filters"]["user_id"], f"eq.{user_id}")
 
+    def test_analysis_queue_requires_sign_in(self):
+        c = TestClient(app)
+        response = c.post("/api/analysis/queue", json={"client_request_id": "not-a-uuid"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_signed_in_analysis_is_accepted_into_the_durable_queue(self):
+        c = TestClient(app)
+        user_id = "2b8e3e0d-7b39-4f73-83b9-90ee5d979fca"
+        client_request_id = "c5db7057-0bfb-4b54-855b-6f4db53c2c7a"
+        queued = {
+            "run_id": "628a9906-127d-46c7-af5b-b0e979e2ac42",
+            "status": "queued",
+            "already_queued": False,
+        }
+        payload = {
+            "client_request_id": client_request_id,
+            "field": {"lat": 24.75, "lon": 90.41, "area_ha": 0.4},
+            "start_date": "2026-11-01",
+            "end_date": "2026-11-30",
+            "priority_choices": ["water", "soil"],
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            },
+        ), patch("fieldshift.api.app.supabase_auth.get_user", return_value={"id": user_id}), patch(
+            "fieldshift.api.app.supabase_auth.queue_analysis_request", return_value=queued
+        ) as queue_call:
+            response = c.post(
+                "/api/analysis/queue",
+                headers={"Authorization": "Bearer valid-user-token"},
+                json=payload,
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["run"]["id"], queued["run_id"])
+        self.assertTrue(response.json()["queued"])
+        self.assertEqual(queue_call.call_args.kwargs["access_token"], "valid-user-token")
+        self.assertEqual(queue_call.call_args.kwargs["client_request_id"], client_request_id)
+        self.assertNotIn("client_request_id", queue_call.call_args.kwargs["request_payload"])
+
     def test_auth_config_is_safe_when_not_configured(self):
         c = TestClient(app)
         with patch.dict(os.environ, {"SUPABASE_URL": "", "SUPABASE_PUBLISHABLE_KEY": ""}):
