@@ -92,6 +92,26 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(payload["p_result"]["result_kind"], "final")
         self.assertTrue(payload["p_result"]["result_payload"]["run"]["is_final"])
 
+    def test_saved_provider_task_ids_are_loaded_from_active_run_sources(self) -> None:
+        expected = {
+            "nasa_smap": "appeears-smap-task",
+            "nasa_hls": "appeears-hls-task",
+        }
+        with patch(
+            "fieldshift.api.analysis_worker._rest_json",
+            return_value=[
+                {"source_key": "nasa_smap", "provider_task_id": "appeears-smap-task"},
+                {"source_key": "nasa_hls", "provider_task_id": "appeears-hls-task"},
+                {"source_key": "nasa_modis_mod16", "provider_task_id": None},
+            ],
+        ) as load:
+            result = analysis_worker._load_provider_task_ids("run-123", "w" * 56)
+
+        self.assertEqual(result, expected)
+        query = load.call_args.kwargs["query"]
+        self.assertIn("provider_task_id=not.is.null", query)
+        self.assertIn("run_id=eq.run-123", query)
+
     def test_worker_api_uses_publishable_key_and_anon_jwt_role_context(self) -> None:
         response = MagicMock()
         response.__enter__.return_value = response
