@@ -56,6 +56,23 @@ jobs:
             echo "- Existing checksum-valid year files are reused; failed/missing years can be retried."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Assume archive role and verify S3 read/write before NASA access
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      - name: Verify S3 archive permissions
+        env:
+          ARCHIVE_BUCKET: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          probe_key="power-history/_preflight/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          printf 'FieldShift archive preflight %s %s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > /tmp/fieldshift-s3-probe.txt
+          aws s3api put-object --bucket "$ARCHIVE_BUCKET" --key "$probe_key" --body /tmp/fieldshift-s3-probe.txt --server-side-encryption AES256 >/dev/null
+          aws s3api get-object --bucket "$ARCHIVE_BUCKET" --key "$probe_key" /tmp/fieldshift-s3-probe-readback.txt >/dev/null
+          cmp /tmp/fieldshift-s3-probe.txt /tmp/fieldshift-s3-probe-readback.txt
+          echo "S3 PutObject/GetObject preflight passed. Probe retained at s3://$ARCHIVE_BUCKET/$probe_key." >> "$GITHUB_STEP_SUMMARY"
+
   ingest:
     name: Archive ${{ matrix.region }}
     needs: preflight
