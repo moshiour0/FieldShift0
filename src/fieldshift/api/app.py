@@ -292,12 +292,19 @@ def run(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 @app.post("/api/internal/worker/tick")
 def fieldshift_worker_tick(request: Request) -> dict[str, Any]:
     """Process at most one Supabase-queued analysis using the server-only worker token."""
-    expected = os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
     presented = request.headers.get("x-fieldshift-worker", "")
-    if not expected or not presented or not hmac.compare_digest(expected, presented):
+    configured_tokens = (
+        os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip(),
+        os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip(),
+    )
+    matched_token = next(
+        (token for token in configured_tokens if token and presented and hmac.compare_digest(token, presented)),
+        None,
+    )
+    if matched_token is None:
         raise HTTPException(status_code=401, detail="Worker authentication failed.")
     try:
-        result = process_analysis_worker_one()
+        result = process_analysis_worker_one(matched_token)
         return {"ok": True, **result}
     except WorkerAPIError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
