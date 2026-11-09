@@ -392,20 +392,6 @@ def queue_analysis_api(request: Request, payload: dict[str, Any] | None = None) 
     }
 
 
-@app.post("/api/internal/worker")
-def internal_analysis_worker(request: Request) -> dict[str, Any]:
-    expected = os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
-    supplied = request.headers.get("x-fieldshift-worker", "").strip()
-    if len(expected) < 48 or not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="Worker authentication failed.")
-    try:
-        return process_analysis_worker_one()
-    except WorkerAPIError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="The background analysis worker failed safely.") from exc
-
-
 @app.post("/api/analysis/run")
 def analysis_run(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
