@@ -125,7 +125,7 @@ def _smap_cache_path(cache_dir: Path, key: str) -> Path:
 
 def _decode_smap_rows(rows: Any) -> tuple[RemoteDay, ...]:
     if not isinstance(rows, list):
-        raise ValueError("SMAP cache observation list is invalid")
+        raise TypeError("SMAP cache observation list is invalid")
     decoded: list[RemoteDay] = []
     for item in rows:
         if not isinstance(item, dict):
