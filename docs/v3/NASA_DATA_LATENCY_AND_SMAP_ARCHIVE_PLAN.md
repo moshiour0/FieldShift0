@@ -319,6 +319,51 @@ The original request must be immutable. A recheck/retry operates on the saved sn
   - Existing POWER archive uses read-back verification; satellite result cache should reuse the same security/integrity discipline.
 - `private.dataset_cache` is present but not yet populated by an AppEEARS-to-Drive source-cache workflow.
 
+## 7.5 Implementation progress — 2026-11-09 (branch head `6ddf3aeead2d81a8b22973d50fefab160249b308`)
+
+### Completed code on the Draft PR branch
+
+- `src/fieldshift/v3/appeears.py` now checks a private Google Drive shared cache for completed Point Sample outputs before submitting or resuming AppEEARS tasks.
+- The shared-cache identity includes product/source key, layer/product version, spatial resolution/cadence, exact request/effective date window, and the five-decimal coordinate precision policy used by the current adapter.
+- Cached objects have a canonical payload SHA-256, private Drive object key, schema version, and identity. The writer uploads and then fetches the exact object bytes back; a mismatch prevents the object from being marked verified.
+- This works for completed SMAP, HLS and MODIS point samples. It is intentionally **on-demand durable caching**, not yet a Bangladesh-wide SMAP raster/tile archive.
+- Local seven-day cache remains only an optimization; Google Drive is the shared durable cache when configured.
+- A corrupt or incompatible shared object is treated as a cache miss. The engine must use the exact live provider path rather than accept the corrupted object.
+- `src/fieldshift/api/analysis_worker.py` now distinguishes pending required from pending optional datasets. When the required core source is ready and only optional satellite work remains, the saved result is `preliminary_ready`, `is_final=false`, and `result_kind=preliminary`; the worker still schedules the pending source retry. If the required core source is pending, it remains `waiting_for_data`.
+- Saved source provenance now records whether shared archive cache verification succeeded, plus archive object key and payload digest.
+- Frontend `src/fieldshift/api/static/index.html` already has a `PRELIMINARY RESULT` readiness state and restores a saved result while the worker continues. Keep its copy distinct from a final result.
+
+### Verification
+
+- Current branch head: `6ddf3aeead2d81a8b22973d50fefab160249b308`.
+- GitHub Actions push run #409 (`42614121990`) and pull-request run #408 (`42614112366`) both completed successfully.
+- Python 3.11 and 3.12: **161 passed, one existing Starlette/httpx TestClient deprecation warning** on each version.
+- `compileall`, strict Ruff and mypy all passed on both Python versions.
+- PR #1 remains Draft/Open/Unmerged. No Production deployment was promoted.
+
+### Not yet verified / next gates
+
+- No live Google Drive read/write round-trip for these new satellite point-cache objects has yet been performed from a deployed current-head Preview.
+- No production or Preview result has yet demonstrated a repeat cold-instance request reusing the shared object against real NASA/AppEEARS data.
+- The current READY Vercel Preview still points at an older commit, not the current branch head; current-head Vercel commit status remains a failure caused by the team's free-plan daily deployment rate limit. Do not treat an older Preview as the current code.
+- The nine geographic storage-tile geometries, 2025 SMAP Area request, NetCDF schema, 3-hour native cadence, cell mapping, object size, QA and Drive read-back remain to be implemented/verified before the 2016–2025 bulk archive.
+- The durable account/queue implementation remains code/database-verified but still needs a real signed-in user acceptance test, two-account isolation test, and a complete live NASA result revision lifecycle.
+
+### AppEEARS Area request research
+
+NASA's AppEEARS Area tutorial documents:
+- `task_type: "area"`;
+- a polygon/feature collection in `params.geo`;
+- an explicit output projection and `params.output.format.type`;
+- `geotiff` or `netcdf4` output formats;
+- task submission through the same AppEEARS task endpoint (HTTP 202 for accepted tasks).
+
+Official API example: https://github.com/nasa/AppEEARS-Data-Resources/blob/main/R/tutorials/AppEEARS_API_Area_R.Rmd
+
+This confirms the technical request shape for an area-archive pilot. It does **not** prove that a 10-year Bangladesh-sized request will pass AppEEARS size/runtime limits or that its output has already been processed. The next step must be one small 2025 area/tile pilot and inspection of the actual bundle.
+
+---
+
 ## 8. Implementation sequence
 
 ### Phase A — create durable exact-result caching (first engineering change)
