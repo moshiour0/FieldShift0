@@ -422,9 +422,10 @@ def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path
 
 
 def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, tmp_path):
+    import hashlib
+
     import ee
     import ee.apitestcase
-    import hashlib
 
     case = ee.apitestcase.ApiTestCase()
     case.setUp()
