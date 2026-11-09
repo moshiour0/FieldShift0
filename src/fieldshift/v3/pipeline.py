@@ -318,6 +318,13 @@ def _load_optional_remote(
                     "setup_hint": "Earth Engine SMAP query failed; exact-location AppEEARS fallback will be attempted when Earthdata credentials are configured.",
                 })
 
+    smap_deferred_by_worker = (
+        allow_live
+        and not allow_live_smap
+        and (gee_credentials_configured() or credentials_configured())
+        and not use_gee_smap
+    )
+
     if allow_live and credentials_configured() and start <= end:
         replace_names = {"NASA SMAP", "NASA HLS", "NASA MODIS MOD16"}
         datasets[:] = [
@@ -332,7 +339,7 @@ def _load_optional_remote(
                 end,
                 cache_dir=cache_dir,
                 existing_task_ids=provider_task_ids,
-                source_keys={"hls_vi", "modis_et"} if use_gee_smap else None,
+                source_keys={"hls_vi", "modis_et"} if (use_gee_smap or smap_deferred_by_worker) else None,
             )
             remote.extend(result.remote)
             for record in result.datasets:
@@ -343,6 +350,20 @@ def _load_optional_remote(
                     continue
                 datasets[:] = [r for r in datasets if r.get("name") != record["name"]]
                 datasets.append(record)
+            if smap_deferred_by_worker:
+                datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
+                datasets.append({
+                    "name": "NASA SMAP",
+                    "source_type": "satellite",
+                    "status": "pending",
+                    "coverage": "SMAP acquisition is deferred on the initial worker passes so the first useful analysis is not blocked by its long provider tail. A later worker attempt will query GEE or the exact-location AppEEARS fallback.",
+                    "retry_after_seconds": 900,
+                    "temporal_resolution": "3-hourly source, daily UTC mean; both moisture bands require 8/8 intervals",
+                    "spatial_resolution": "~11 km GEE pixel; native SMAP L4 grid ~9 km",
+                    "quality_status": "not_yet_measured",
+                    "quality_note": "No SMAP values were substituted or treated as zero. This source is pending, not absent soil moisture.",
+                    "citation": "https://doi.org/10.5067/T5RUATAQREF8",
+                })
         except Exception as exc:
             for name in sorted(replace_names):
                 existing = next((r for r in datasets if r.get("name") == name and r.get("status") == "available"), None)
