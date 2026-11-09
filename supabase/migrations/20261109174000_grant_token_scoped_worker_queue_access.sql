@@ -4,6 +4,11 @@
 
 grant usage on schema private to anon;
 grant select, update on table private.analysis_run_jobs to anon;
+
+-- The worker increments per-source retry counters during the token-gated upsert.
+-- Keep these as narrow column grants; do not grant table-wide INSERT/UPDATE.
+grant insert (attempt_count, max_attempts), update (attempt_count, max_attempts)
+    on table public.analysis_run_sources to anon;
 alter table private.analysis_run_jobs alter column max_attempts set default 50;
 
 drop policy if exists "FieldShift worker can read queue with token" on private.analysis_run_jobs;
