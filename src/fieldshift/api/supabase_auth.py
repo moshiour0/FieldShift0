@@ -167,6 +167,27 @@ def queue_analysis_request(
     return result
 
 
+def request_analysis_run_recheck(*, access_token: str, run_id: str) -> dict[str, Any]:
+    """Ask Supabase to requeue one owner-verified saved analysis."""
+    import uuid
+
+    try:
+        safe_run_id = str(uuid.UUID(run_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("A valid saved analysis ID is required.") from exc
+
+    config = settings()
+    result = _request_json(
+        f"{config['url']}/rest/v1/rpc/request_analysis_run_recheck",
+        method="POST",
+        headers={**_headers(access_token), "Content-Type": "application/json"},
+        payload={"p_run_id": safe_run_id},
+    )
+    if not isinstance(result, dict) or not result.get("run_id"):
+        raise SupabaseAPIError(502, "Supabase did not confirm the saved analysis recheck.")
+    return result
+
+
 def persist_product_analysis(
     *,
     access_token: str,
