@@ -81,7 +81,9 @@ class SMAPPointResult:
     retry_after_seconds: int | None = None
     archive_cache_status: str = "not_configured"
     archive_object_key: str | None = None
+    archive_object_keys: tuple[str, ...] = ()
     archive_sha256: str | None = None
+    chunk_count: int = 1
 
 
 def gee_credentials_configured() -> bool:
@@ -214,6 +216,7 @@ def _smap_result(
     rows: tuple[RemoteDay, ...], expected: int, *, retrieval_mode: str,
     retry_after_seconds: int | None = None, archive_cache_status: str = "not_configured",
     archive_object_key: str | None = None, archive_sha256: str | None = None,
+    archive_object_keys: tuple[str, ...] = (), chunk_count: int = 1,
 ) -> SMAPPointResult:
     coverage = len(rows) / max(1, expected)
     status = "available" if len(rows) == expected else "partial" if rows else "pending" if retry_after_seconds else "unavailable"
@@ -222,10 +225,12 @@ def _smap_result(
         retrieval_mode=retrieval_mode, retry_after_seconds=retry_after_seconds,
         archive_cache_status=archive_cache_status, archive_object_key=archive_object_key,
         archive_sha256=archive_sha256,
+        archive_object_keys=archive_object_keys or ((archive_object_key,) if archive_object_key else ()),
+        chunk_count=chunk_count,
     )
 
 
-def smap_daily_point_timeseries(
+def _smap_daily_point_timeseries_window(
     lat: float, lon: float, start: date, end: date, cache_dir: str | Path,
 ) -> SMAPPointResult:
     """Fetch point SMAP L4 daily means from the 3-hourly GEE collection.
@@ -243,7 +248,7 @@ def smap_daily_point_timeseries(
         raise ValueError("SMAP date window must be within 2015-03-31 and today")
     expected = (end - start).days + 1
     if expected > 366:
-        raise ValueError("SMAP point request is limited to 366 days; split longer history into year-sized windows")
+        raise ValueError("Internal SMAP point window must not exceed 366 days")
 
     identity = _smap_identity(lat, lon, start, end)
     cache_key = _smap_key(identity)
@@ -379,6 +384,71 @@ def smap_daily_point_timeseries(
         retry_after_seconds=retry_after, archive_cache_status=archive_status,
         archive_object_key=object_key if archive_status == "verified" else None,
         archive_sha256=archive_digest,
+    )
+
+
+def smap_daily_point_timeseries(
+    lat: float, lon: float, start: date, end: date, cache_dir: str | Path,
+) -> SMAPPointResult:
+    """Read a long SMAP window in bounded, independently cached <=366-day chunks.
+
+    The chunk boundaries depend only on the original request's start date. Each
+    completed chunk is persisted and verified independently, so a later retry
+    can reuse successful chunks without repeating their Earth Engine queries.
+    """
+    if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise ValueError("invalid latitude/longitude for NASA SMAP")
+    if start > end or start < date(2015, 3, 31) or end > date.today():
+        raise ValueError("SMAP date window must be within 2015-03-31 and today")
+    expected = (end - start).days + 1
+    if expected > 30 * 366:
+        raise ValueError("SMAP historical point window cannot exceed 30 years")
+
+    chunks: list[tuple[date, date]] = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(end, cursor + timedelta(days=365))
+        chunks.append((cursor, chunk_end))
+        cursor = chunk_end + timedelta(days=1)
+
+    results = [
+        _smap_daily_point_timeseries_window(lat, lon, chunk_start, chunk_end, cache_dir)
+        for chunk_start, chunk_end in chunks
+    ]
+    by_date = {row.d: row for result in results for row in result.rows}
+    rows = tuple(by_date[key] for key in sorted(by_date))
+    retry_values = [result.retry_after_seconds for result in results if result.retry_after_seconds is not None]
+    retry_after = max(retry_values, default=None)
+    coverage = len(rows) / max(1, expected)
+    status = (
+        "available" if len(rows) == expected else
+        "partial" if rows else
+        "pending" if retry_after is not None else
+        "unavailable"
+    )
+    modes = {result.retrieval_mode for result in results}
+    retrieval_mode = next(iter(modes)) if len(modes) == 1 else "mixed_chunks"
+    chunk_objects = tuple(key for result in results for key in result.archive_object_keys)
+    archive_states = {result.archive_cache_status for result in results}
+    archive_status = (
+        "verified" if archive_states == {"verified"} else
+        "write_failed" if "write_failed" in archive_states else
+        "partial" if "verified" in archive_states else
+        "not_configured"
+    )
+    single_object = chunk_objects[0] if len(chunk_objects) == 1 else None
+    single_sha = results[0].archive_sha256 if len(results) == 1 else None
+    return SMAPPointResult(
+        rows=rows,
+        status=status,
+        coverage_fraction=round(min(1.0, coverage), 5),
+        retrieval_mode=retrieval_mode,
+        retry_after_seconds=retry_after,
+        archive_cache_status=archive_status,
+        archive_object_key=single_object,
+        archive_object_keys=chunk_objects,
+        archive_sha256=single_sha,
+        chunk_count=len(chunks),
     )
 
 
