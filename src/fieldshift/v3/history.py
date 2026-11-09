@@ -11,9 +11,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from . import google_drive
 from .models import Provenance, WeatherDay
 from .nasa import NasaDataError, _cache_write, power_daily
-from . import google_drive
 
 ROOT = Path(__file__).resolve().parents[3]
 REGIONS: list[dict[str, Any]] = [
