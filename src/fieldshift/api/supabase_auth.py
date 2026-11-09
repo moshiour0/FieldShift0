@@ -253,3 +253,175 @@ def persist_product_analysis(
         sources=sources,
         result_record=result_record,
     )
+
+
+def worker_rpc(
+    function_name: str,
+    *,
+    worker_secret: str,
+    payload: dict[str, Any],
+    timeout: float = 12.0,
+) -> Any:
+    """Call an RLS-gated worker RPC using the publishable key and server-only header token."""
+    config = settings()
+    if not config["configured"]:
+        raise SupabaseAPIError(503, "Worker database access is not configured.")
+    if not function_name.replace("_", "").isalnum():
+        raise ValueError("Invalid worker RPC name")
+    return _request_json(
+        f"{config['url']}/rest/v1/rpc/{function_name}",
+        method="POST",
+        headers={
+            "apikey": str(config["publishable_key"]),
+            "Content-Type": "application/json",
+            "x-fieldshift-worker": worker_secret,
+        },
+        payload={**payload, "p_worker_token": worker_secret},
+        timeout=timeout,
+    )
+
+
+def claim_worker_job(worker_secret: str) -> dict[str, Any] | None:
+    result = worker_rpc(
+        "claim_analysis_run_job",
+        worker_secret=worker_secret,
+        payload={},
+    )
+    return result if isinstance(result, dict) and result.get("id") else None
+
+
+def save_worker_analysis(
+    *,
+    worker_secret: str,
+    job_id: str,
+    run_id: str,
+    response_payload: dict[str, Any],
+    retry_at: str | None,
+) -> dict[str, Any]:
+    run = response_payload.get("run") or {}
+    window = run.get("evidence_window") or {}
+    start_date = window.get("start_date")
+    end_date = window.get("end_date")
+    if not start_date or not end_date:
+        raise ValueError("The refreshed analysis response is missing its observation window.")
+
+    evidence = response_payload.get("evidence") or {}
+    evidence_items = evidence.get("items") or []
+    canonical_evidence = json.dumps(
+        evidence_items, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    ).encode("utf-8")
+    evidence_fingerprint = hashlib.sha256(canonical_evidence).hexdigest()
+
+    status = str(run.get("status") or "preliminary_ready")
+    result_kind = {
+        "final_ready": "final",
+        "final_with_gaps": "final_with_gaps",
+    }.get(status, "preliminary")
+    status_map = {
+        "available": "available",
+        "ready": "available",
+        "queued": "queued",
+        "pending": "pending",
+        "retrying": "retrying",
+        "partial": "partial",
+        "stale": "stale",
+        "unavailable": "unavailable",
+        "not_configured": "not_configured",
+        "failed": "failed",
+        "error": "failed",
+        "fallback": "failed",
+        "skipped": "skipped",
+    }
+
+    sources: list[dict[str, Any]] = []
+    for item in evidence_items:
+        source_status = str(item.get("status") or "failed").lower()
+        retry_seconds = item.get("retry_after_seconds")
+        next_retry = None
+        if retry_seconds is not None:
+            try:
+                from datetime import UTC, datetime, timedelta
+                next_retry = (datetime.now(UTC) + timedelta(seconds=max(1, int(retry_seconds)))).isoformat()
+            except (TypeError, ValueError, OverflowError):
+                next_retry = None
+        sources.append({
+            "source_key": str(item.get("source_key") or "unknown_source"),
+            "source_name": str(item.get("name") or "Evidence source"),
+            "source_type": str(item.get("source_type") or "unknown"),
+            "required": bool(item.get("required", False)),
+            "provider": item.get("provider"),
+            "product_key": item.get("product_key"),
+            "provider_task_id": item.get("provider_task_id") or item.get("task_id"),
+            "status": status_map.get(source_status, "failed"),
+            "requested_start": start_date,
+            "requested_end": end_date,
+            "coverage_start": item.get("coverage_start") or item.get("data_start_date"),
+            "coverage_end": item.get("coverage_end") or item.get("data_end_date"),
+            "coverage_fraction": item.get("coverage_fraction"),
+            "next_retry_at": next_retry,
+            "last_error_code": "provider_pending" if source_status in {"pending", "retrying"} else None,
+            "last_error_message": None,
+            "quality": {
+                "quality_status": item.get("quality_status"),
+                "quality_note": item.get("quality_note"),
+                "coverage": item.get("coverage"),
+                "confidence": item.get("confidence"),
+            },
+            "provenance": {
+                "retrieval_mode": item.get("retrieval_mode"),
+                "citation": item.get("citation"),
+                "data_start_date": item.get("data_start_date"),
+                "data_end_date": item.get("data_end_date"),
+                "temporal_resolution": item.get("temporal_resolution"),
+                "spatial_resolution": item.get("spatial_resolution"),
+            },
+        })
+
+    run_record = {
+        "status": status,
+        "progress_percent": 100 if run.get("is_final") else 75,
+        "status_message": str(run.get("status_message") or "Evidence refreshed."),
+    }
+    result_record = {
+        "result_kind": result_kind,
+        "evidence_fingerprint": evidence_fingerprint,
+        "result_payload": response_payload,
+    }
+    result = worker_rpc(
+        "worker_save_analysis",
+        worker_secret=worker_secret,
+        payload={
+            "p_job_id": job_id,
+            "p_run_id": run_id,
+            "p_run": run_record,
+            "p_sources": sources,
+            "p_result": result_record,
+            "p_retry_at": retry_at,
+        },
+        timeout=20,
+    )
+    if not isinstance(result, dict) or not result.get("run_id"):
+        raise SupabaseAPIError(502, "Worker persistence did not confirm a saved revision.")
+    return result
+
+
+def fail_worker_job(
+    *,
+    worker_secret: str,
+    job_id: str,
+    error_code: str,
+    retry_at: str | None,
+) -> dict[str, Any]:
+    result = worker_rpc(
+        "worker_fail_analysis_job",
+        worker_secret=worker_secret,
+        payload={
+            "p_job_id": job_id,
+            "p_error_code": error_code[:80],
+            "p_retry_at": retry_at,
+        },
+        timeout=12,
+    )
+    if not isinstance(result, dict) or not result.get("job_status"):
+        raise SupabaseAPIError(502, "Worker failure state was not confirmed.")
+    return result
