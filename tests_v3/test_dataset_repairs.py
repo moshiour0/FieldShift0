@@ -160,8 +160,11 @@ def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkey
         confidence=0.88,
     )
     smap_result = gee.SMAPPointResult(
-        rows=(RemoteDay(START, smap_surface_m3_m3=0.25, smap_rootzone_m3_m3=0.32,
-                        source=smap_provenance.source, provenance=smap_provenance),),
+        rows=tuple(
+            RemoteDay(date.fromordinal(START.toordinal() + offset), smap_surface_m3_m3=0.25,
+                      smap_rootzone_m3_m3=0.32, source=smap_provenance.source, provenance=smap_provenance)
+            for offset in range((END - START).days + 1)
+        ),
         status="available", coverage_fraction=1.0, retrieval_mode="google_earth_engine",
         archive_cache_status="verified",
         archive_object_key="satellite-point-cache/v1/smap-gee/test.json",
@@ -192,7 +195,7 @@ def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkey
     assert satellite["NASA SMAP"]["status"] == "available"
     assert satellite["NASA SMAP"]["retrieval_mode"] == "google_earth_engine"
     assert satellite["NASA SMAP"]["archive_cache_status"] == "verified"
-    assert "8 complete 3-hourly" in satellite["NASA SMAP"]["coverage"]
+    assert "eight complete 3-hourly" in satellite["NASA SMAP"]["coverage"]
     assert satellite["NASA HLS"]["status"] == "available"
     assert satellite["NASA MODIS MOD16"]["status"] == "available"
     assert any(row.smap_surface_m3_m3 == pytest.approx(0.25) for row in remote)
