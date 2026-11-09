@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from fieldshift.api.app import app
@@ -34,6 +36,14 @@ def test_date_range_never_turns_monthly_aggregate_into_daily_records() -> None:
     assert result["monthly"]
     assert all(row["archive_representation"] == "monthly_aggregate" for row in result["monthly"])
     assert "daily crop-model inputs" in result["note"]
+
+
+def test_history_explorer_labels_monthly_summary_days_as_equivalents() -> None:
+    page = (Path(__file__).resolve().parents[1] / "src" / "fieldshift" / "api" / "static" / "history.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Days represented by monthly summaries" in page
+    assert "not daily observations" in page
 
 
 def test_satellite_connector_presence_does_not_claim_an_archive(tmp_path, monkeypatch) -> None:
