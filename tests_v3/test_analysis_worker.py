@@ -117,6 +117,11 @@ class TestAnalysisWorker(unittest.TestCase):
             "run": {"status": "waiting_for_data", "is_final": False},
             "evidence": {"items": []},
         }
+        request_payload = {
+            "start_date": "2026-06-20",
+            "end_date": "2026-06-30",
+            "field": {"lat": 24.75},
+        }
         with (
             patch(
                 "fieldshift.api.analysis_worker._settings",
@@ -126,7 +131,7 @@ class TestAnalysisWorker(unittest.TestCase):
                 "id": "job-123", "run_id": "run-123", "attempts": 2,
             }),
             patch("fieldshift.api.analysis_worker._load_run", return_value={
-                "request_payload": {"start_date": "2026-06-20", "end_date": "2026-06-30", "field": {"lat": 24.75}},
+                "request_payload": request_payload,
             }),
             patch("fieldshift.api.analysis_worker._load_provider_task_ids", return_value={
                 "nasa_smap": "smap-task-123", "nasa_hls": "hls-task-456",
@@ -142,9 +147,7 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(payload["_provider_task_ids"], {
             "nasa_smap": "smap-task-123", "nasa_hls": "hls-task-456",
         })
-        self.assertNotIn("_provider_task_ids", {
-            "start_date": "2026-06-20", "end_date": "2026-06-30", "field": {"lat": 24.75},
-        })
+        self.assertNotIn("_provider_task_ids", request_payload)
         self.assertEqual(result["run_id"], "run-123")
         self.assertEqual(result["status"], "waiting_for_data")
 
