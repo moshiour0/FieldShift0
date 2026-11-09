@@ -832,7 +832,12 @@ def _sample_source(
             detail = safe_error(AppEEARSDataError(str(task.get("error") or task.get("message") or status)))
             return result("unavailable", f"This {key} task ended with status {status}; the other products run independently.", error=detail)
         if time.monotonic() >= deadline:
-            return result("pending", f"NASA is {status} this point sample. Refreshing resumes the same task.", retry_after_seconds=30)
+            return result(
+                "pending",
+                f"NASA is {status} this point sample. Refreshing resumes the same task.",
+                retry_after_seconds=30,
+                provider_task_id=task_id,
+            )
         time.sleep(min(10, max(0, deadline - time.monotonic())))
         task = None
     bundle = _safe_json_request(f"bundle/{task_id}", token=token, timeout=timeout)
