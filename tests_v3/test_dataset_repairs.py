@@ -394,7 +394,7 @@ def test_initial_smap_cache_miss_returns_pending_without_live_gee(monkeypatch, t
     )
     assert result.status == "pending"
     assert result.rows == ()
-    assert result.retry_after_seconds == 3600
+    assert result.retry_after_seconds == 900
     assert result.retrieval_mode == "cache_miss"
     assert result.chunk_count == 1
 
