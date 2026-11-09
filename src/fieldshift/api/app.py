@@ -136,7 +136,7 @@ def account_runs(request: Request) -> dict[str, Any]:
             "analysis_runs",
             access_token=str(token),
             filters={
-                "select": "id,created_at,updated_at,requested_start,requested_end,status,stage,progress_percent,status_message,engine_version",
+                "select": "id,created_at,updated_at,started_at,completed_at,last_activity_at,requested_start,requested_end,status,stage,progress_percent,status_message,engine_version",
                 "user_id": f"eq.{user['id']}",
                 "order": "created_at.desc",
                 "limit": "50",
@@ -243,9 +243,12 @@ def integration_status() -> dict[str, Any]:
             "saved_runs": "supabase_postgres",
         },
         "analysis_state": {
-            "storage": "process_memory_for_active_execution_and_supabase_for_saved_completed_runs",
+            "storage": "supabase_queue_and_versioned_postgres_results_for_signed_in_runs",
             "completed_signed_in_runs_durable_across_instances": bool(supabase_auth.settings()["configured"]),
-            "active_execution_durable_across_instances": False,
+            "active_execution_durable_across_instances": bool(
+                supabase_auth.settings()["configured"]
+                and os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
+            ),
         },
     }
 
