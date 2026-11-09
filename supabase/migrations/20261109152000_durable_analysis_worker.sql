@@ -34,7 +34,7 @@ as $$
            where s.setting_id = 1
              and s.token_sha256 = extensions.digest(convert_to(p_candidate, 'UTF8'), 'sha256')
        );
-$;
+$$;
 revoke all on function public.verify_fieldshift_worker_token(text) from public, anon, authenticated;
 grant execute on function public.verify_fieldshift_worker_token(text) to service_role;
 
@@ -59,7 +59,7 @@ begin
     on conflict (idempotency_key) do nothing;
     return new;
 end;
-$;
+$$;
 
 drop trigger if exists enqueue_initial_analysis_job on public.analysis_runs;
 create trigger enqueue_initial_analysis_job
@@ -132,7 +132,7 @@ begin
 
     return jsonb_build_object('run_id', v_run_id, 'status', 'queued', 'already_queued', false);
 end;
-$;
+$$;
 
 revoke all on function public.queue_analysis_request(uuid, jsonb) from public, anon;
 grant execute on function public.queue_analysis_request(uuid, jsonb) to authenticated;
@@ -222,7 +222,7 @@ begin
         'requested_end', v_run.requested_end
     );
 end;
-$;
+$$;
 
 revoke all on function public.claim_analysis_job(text, integer) from public, anon, authenticated;
 grant execute on function public.claim_analysis_job(text, integer) to service_role;
@@ -476,7 +476,7 @@ begin
         'result_id', v_result_id
     );
 end;
-$;
+$$;
 
 revoke all on function public.complete_analysis_job(uuid, text, jsonb) from public, anon, authenticated;
 grant execute on function public.complete_analysis_job(uuid, text, jsonb) to service_role;
@@ -557,7 +557,7 @@ begin
 
     return jsonb_build_object('job_id',v_job.id,'status',v_new_status,'retry_after_seconds',v_delay);
 end;
-$;
+$$;
 
 revoke all on function public.retry_analysis_job(uuid, text, text, text) from public, anon, authenticated;
 grant execute on function public.retry_analysis_job(uuid, text, text, text) to service_role;
