@@ -375,7 +375,7 @@ def _smap_daily_point_timeseries_window(
                 "source": row.source,
                 "provenance": asdict(row.provenance) if row.provenance else None,
             }
-            for row in rows
+            for row in smap_rows
         ],
         "meta": meta,
     })
