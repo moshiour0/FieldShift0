@@ -124,6 +124,7 @@ declare
     v_job_status text;
     v_status_message text;
     v_run_status text;
+    v_run_status_message text;
 begin
     v_header_token := nullif(current_setting('request.headers', true), '')::jsonb ->> 'x-fieldshift-worker';
     if not private.worker_token_matches(p_worker_token)
@@ -213,9 +214,16 @@ begin
     end loop;
 
     v_run_status := case
-        when p_retry_at is not null and v_job.attempts >= v_job.max_attempts
-            then 'waiting_for_data'
+        when p_retry_at is not null then 'waiting_for_data'
         else coalesce(nullif(p_run->>'status', ''), v_run.status)
+    end;
+
+    v_run_status_message := case
+        when p_retry_at is not null and v_job.attempts >= v_job.max_attempts
+            then 'The provider data is still incomplete after the automatic retry window. This run is saved as waiting for data; open it later and request another check.'
+        when p_retry_at is not null
+            then 'A preliminary evidence snapshot is available. Some provider data is still pending and will be checked again automatically.'
+        else coalesce(nullif(p_run->>'status_message', ''), 'Evidence reconciliation completed.')
     end;
 
     update public.analysis_runs
@@ -226,15 +234,11 @@ begin
                else 'analysis_reconciled'
            end,
            progress_percent = case
-               when v_job.attempts >= v_job.max_attempts and p_retry_at is not null
-                   then greatest(coalesce((p_run->>'progress_percent')::smallint, 75), 75)
+               when p_retry_at is not null
+                   then least(coalesce((p_run->>'progress_percent')::smallint, 75), 75)
                else coalesce((p_run->>'progress_percent')::smallint, 100)
            end,
-           status_message = case
-               when p_retry_at is not null and v_job.attempts >= v_job.max_attempts
-                   then 'The provider data is still incomplete after the automatic retry window. This run is saved as waiting for data; open it later and request another check.'
-               else p_run->>'status_message'
-           end,
+           status_message = v_run_status_message,
            completed_at = case when p_retry_at is null then now() else null end,
            last_activity_at = now(),
            updated_at = now()
@@ -258,6 +262,9 @@ begin
         v_result_payload := coalesce(p_result->'result_payload', '{}'::jsonb);
         v_result_payload := jsonb_set(v_result_payload, '{run,id}', to_jsonb(v_job.run_id::text), true);
         v_result_payload := jsonb_set(v_result_payload, '{run,saved_run_id}', to_jsonb(v_job.run_id::text), true);
+        v_result_payload := jsonb_set(v_result_payload, '{run,status}', to_jsonb(v_run_status), true);
+        v_result_payload := jsonb_set(v_result_payload, '{run,status_message}', to_jsonb(v_run_status_message), true);
+        v_result_payload := jsonb_set(v_result_payload, '{run,is_final}', to_jsonb(v_run_status in ('final_ready','final_with_gaps')), true);
 
         insert into public.analysis_results (
             run_id, revision, result_kind, evidence_fingerprint, result_payload, is_current
@@ -265,7 +272,7 @@ begin
         values (
             v_job.run_id,
             v_revision,
-            p_result->>'result_kind',
+            case when p_retry_at is not null then 'preliminary' else p_result->>'result_kind' end,
             v_fingerprint,
             v_result_payload,
             true
@@ -320,6 +327,8 @@ begin
         'run_id', v_job.run_id,
         'result_id', v_result_id,
         'revision', v_revision,
+        'status', v_run_status,
+        'status_message', v_run_status_message,
         'job_status', v_job_status,
         'next_retry_at', case when v_job_status = 'retrying' then p_retry_at else null end
     );
