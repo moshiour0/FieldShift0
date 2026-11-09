@@ -36,6 +36,62 @@ class TestAnalysisWorker(unittest.TestCase):
         self.assertEqual(sources[0]["last_error_code"], "PROVIDER_PENDING")
         self.assertNotIn("internal response body", str(sources[0]))
 
+    def test_pending_provider_downgrades_engine_final_to_waiting_for_data(self) -> None:
+        engine_result = {
+            "run": {
+                "status": "final_with_gaps",
+                "is_final": True,
+                "status_message": "The engine returned a result with gaps.",
+                "evidence_window": {"start_date": "2026-08-01", "end_date": "2026-08-31"},
+            },
+            "evidence": {
+                "items": [
+                    {"source_key": "nasa_power", "name": "NASA POWER", "status": "available"},
+                    {
+                        "source_key": "nasa_smap",
+                        "name": "NASA SMAP",
+                        "status": "pending",
+                        "retry_after_seconds": 3600,
+                    },
+                ]
+            },
+        }
+        with patch(
+            "fieldshift.api.analysis_worker._rest_json",
+            return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "retrying"},
+        ) as save:
+            analysis_worker._save_result("job-1", engine_result, "w" * 56)
+
+        payload = save.call_args.kwargs["payload"]
+        self.assertEqual(payload["p_run"]["status"], "waiting_for_data")
+        self.assertEqual(payload["p_result"]["result_kind"], "preliminary")
+        saved_run = payload["p_result"]["result_payload"]["run"]
+        self.assertEqual(saved_run["status"], "waiting_for_data")
+        self.assertFalse(saved_run["is_final"])
+        self.assertIn("still pending", saved_run["status_message"])
+        self.assertEqual(engine_result["run"]["status"], "final_with_gaps")
+
+    def test_final_result_without_pending_providers_remains_final(self) -> None:
+        engine_result = {
+            "run": {
+                "status": "final_ready",
+                "is_final": True,
+                "status_message": "All required evidence is available.",
+                "evidence_window": {"start_date": "2026-08-01", "end_date": "2026-08-31"},
+            },
+            "evidence": {"items": [{"source_key": "nasa_power", "name": "NASA POWER", "status": "available"}]},
+        }
+        with patch(
+            "fieldshift.api.analysis_worker._rest_json",
+            return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "succeeded"},
+        ) as save:
+            analysis_worker._save_result("job-1", engine_result, "w" * 56)
+
+        payload = save.call_args.kwargs["payload"]
+        self.assertEqual(payload["p_run"]["status"], "final_ready")
+        self.assertEqual(payload["p_result"]["result_kind"], "final")
+        self.assertTrue(payload["p_result"]["result_payload"]["run"]["is_final"])
+
     def test_worker_api_uses_publishable_key_and_anon_jwt_role_context(self) -> None:
         response = MagicMock()
         response.__enter__.return_value = response
