@@ -206,7 +206,7 @@ For the full variable checklist, route diagnostics, current implementation gaps,
 
 ### Operational requirements
 
-For durable production refresh jobs, configure `FIELD_SHIFT_JOBS_DSN` (PostgreSQL) and `FIELD_SHIFT_ARCHIVE_S3_BUCKET` (shared object storage), plus separate least-privilege cloud identities for GitHub Actions writes and Vercel runtime reads. The Vercel web function must not be treated as a persistent worker. Without those dependencies the refresh endpoint deliberately reports that refresh is unavailable; cached charts and analysis still work where data is bundled or reachable. The manual nine-region NASA POWER daily backfill, its OIDC/S3 requirements, resume behavior and API verification criteria are documented in [Data Foundation Operations](docs/DATA_FOUNDATION_OPERATIONS.md).
+For a durable regional history and curated satellite archive, configure the private Google Drive OAuth secrets described in [Data Foundation Operations](docs/DATA_FOUNDATION_OPERATIONS.md). GitHub Actions writes checksum-validated files and the Vercel API reads the same private archive using the restricted `drive.file` scope. The Vercel web function must not be treated as a persistent worker. Durable refresh-job queueing remains a separate PostgreSQL requirement through `FIELD_SHIFT_JOBS_DSN`; without it, refresh requests must not be treated as a durable queue.
 
 Include `data/history/**` with the Vercel function so curated regional history is available at runtime. Satellite archives are separate under `data/satellite/curated/{region}/{product}.json` and are returned as `not_archived` unless a checksum-validated QA-curated dataset exists.
 
