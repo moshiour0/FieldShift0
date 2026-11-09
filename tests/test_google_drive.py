@@ -68,6 +68,9 @@ def test_drive_upload_updates_existing_file_id(monkeypatch: pytest.MonkeyPatch) 
         sha256=hashlib.sha256(data).hexdigest(),
     )
     assert captured["file_id"] == "existing"
+    assert captured["mime_type"] == "application/json"
+
+
 def test_large_drive_upload_uses_resumable_session(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str, dict[str, str]]] = []
 
@@ -83,6 +86,7 @@ def test_large_drive_upload_uses_resumable_session(monkeypatch: pytest.MonkeyPat
         parent_id="root",
         name="large.json",
         content=b"x" * (5 * 1024 * 1024 + 1),
+        mime_type="text/csv",
     )
     assert result["id"] == "large-file"
     assert len(calls) == 2
@@ -90,4 +94,6 @@ def test_large_drive_upload_uses_resumable_session(monkeypatch: pytest.MonkeyPat
     assert "uploadType=resumable" in calls[0][1]
     assert calls[1][0] == "PUT"
     assert calls[1][1] == "https://upload.example/session"
+    assert calls[0][2]["X-Upload-Content-Type"] == "text/csv"
+    assert calls[1][2]["Content-Type"] == "text/csv"
     assert calls[1][2]["Content-Length"] == str(5 * 1024 * 1024 + 1)
