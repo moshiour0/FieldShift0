@@ -359,7 +359,7 @@ def _smap_daily_point_timeseries_window(
     archive_digest = None
     if result_state.status in {"available", "partial"} and retry_after is None and google_drive.configured():
         try:
-            archive_digest = _smap_shared_cache_write(object_key, cache_key, identity, tuple(rows), meta)
+            archive_digest = _smap_shared_cache_write(object_key, cache_key, identity, tuple(smap_rows), meta)
             archive_status = "verified"
         except Exception:
             archive_status = "write_failed"
