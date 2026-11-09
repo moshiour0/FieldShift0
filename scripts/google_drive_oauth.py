@@ -4,6 +4,8 @@ from __future__ import annotations
 import getpass
 import json
 import secrets
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -91,6 +93,28 @@ def _api_call(access_token: str, method: str, path: str, payload: dict[str, Any]
     return data
 
 
+def _open_authorization_url(auth_url: str) -> bool:
+    """Open the consent URL with Termux's Android intent bridge when available."""
+    termux_open = shutil.which("termux-open-url")
+    if termux_open:
+        try:
+            completed = subprocess.run(
+                [termux_open, auth_url],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+            if completed.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        return bool(webbrowser.open(auth_url))
+    except webbrowser.Error:
+        return False
+
+
 def main() -> int:
     print("FieldShift0: Google Drive private archive setup")
     print("In Google Cloud, enable Google Drive API and create an OAuth Client ID of type Desktop app.")
@@ -115,9 +139,13 @@ def main() -> int:
     }
     auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
     print("\nOpening Google authorization page. Authorize the account with the 5 TB Drive storage.")
-    print("If your browser does not open, copy this URL:\n" + auth_url)
-    webbrowser.open(auth_url)
-    server.timeout = 300
+    print("If the browser does not open automatically, copy this URL into Chrome on THIS phone:")
+    print(auth_url)
+    if not _open_authorization_url(auth_url):
+        print("Automatic browser launch was unavailable; use the URL printed above.")
+    print("\nKeep Termux running while you approve access in the browser.")
+    print("Google will redirect back to 127.0.0.1 on this phone; do not close this session.")
+    server.timeout = 600
     server.handle_request()
     callback_state = getattr(server, "state", "")
     code = getattr(server, "code", "")
