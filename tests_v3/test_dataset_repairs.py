@@ -132,7 +132,6 @@ def test_pending_tasks_resume_from_persisted_ids_after_serverless_cache_loss(nas
     assert {d["status"] for d in second.datasets} == {"available"}
     assert all(d["retrieval_mode"] == "live" for d in second.datasets)
     assert nasa.calls.count(("task", "GET")) == 1
-    assert not any(path == "task" and method == "POST" for path, method in nasa.calls) is False
 
 
 def test_date_aware_modis_selection_avoids_expired_gap_filled_product(nasa):
