@@ -12,30 +12,33 @@ on:
         required: true
         type: number
         default: 2025
-
 permissions:
   contents: read
-  id-token: write
-
 concurrency:
   group: fieldshift-power-history-backfill
   cancel-in-progress: false
-
 jobs:
   preflight:
-    name: Verify archive prerequisites
+    name: Verify Google Drive archive prerequisites
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Require durable storage and validate the year window
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate credentials, folder access and year window
         env:
-          ARCHIVE_BUCKET: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET }}
-          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           START_YEAR: ${{ inputs.start_year }}
           END_YEAR: ${{ inputs.end_year }}
         run: |
           set -euo pipefail
-          if [[ -z "$ARCHIVE_BUCKET" || -z "$AWS_ROLE_ARN" ]]; then
-            echo "::error title=Archive infrastructure missing::Set the repository Variables FIELD_SHIFT_ARCHIVE_S3_BUCKET and AWS_ROLE_ARN before running a historical backfill. No NASA data request was started."
+          if [[ -z "$GOOGLE_DRIVE_CLIENT_ID" || -z "$GOOGLE_DRIVE_CLIENT_SECRET" || -z "$GOOGLE_DRIVE_REFRESH_TOKEN" || -z "$GOOGLE_DRIVE_FOLDER_ID" ]]; then
+            echo "::error title=Google Drive archive not configured::Add all four GOOGLE_DRIVE_* repository Actions Secrets before running this workflow. No NASA data request was started."
             exit 1
           fi
           if ! [[ "$START_YEAR" =~ ^[0-9]{4}$ && "$END_YEAR" =~ ^[0-9]{4}$ ]]; then
@@ -50,29 +53,12 @@ jobs:
           {
             echo "## NASA POWER historical archive"
             echo "- Requested years: $START_YEAR–$END_YEAR"
-            echo "- Destination: configured S3 bucket, prefix power-history/{region}/{year}.json"
+            echo "- Destination: private Google Drive / FieldShift0 Archive / power-history/{region}/{year}.json"
             echo "- Regions: all nine configured representative points"
             echo "- Parallel region workers: 3"
-            echo "- Existing checksum-valid year files are reused; failed/missing years can be retried."
+            echo "- Existing checksum-valid archive files are reused on reruns."
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Assume archive role and verify S3 read/write before NASA access
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
-      - name: Verify S3 archive permissions
-        env:
-          ARCHIVE_BUCKET: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET }}
-        run: |
-          set -euo pipefail
-          probe_key="power-history/_preflight/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          printf 'FieldShift archive preflight %s %s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > /tmp/fieldshift-s3-probe.txt
-          aws s3api put-object --bucket "$ARCHIVE_BUCKET" --key "$probe_key" --body /tmp/fieldshift-s3-probe.txt --server-side-encryption AES256 >/dev/null
-          aws s3api get-object --bucket "$ARCHIVE_BUCKET" --key "$probe_key" /tmp/fieldshift-s3-probe-readback.txt >/dev/null
-          cmp /tmp/fieldshift-s3-probe.txt /tmp/fieldshift-s3-probe-readback.txt
-          echo "S3 PutObject/GetObject preflight passed. Probe retained at s3://$ARCHIVE_BUCKET/$probe_key." >> "$GITHUB_STEP_SUMMARY"
-
+          python scripts/google_drive_archive.py verify
   ingest:
     name: Archive ${{ matrix.region }}
     needs: preflight
@@ -97,16 +83,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install archive dependencies
-        run: python -m pip install -e '.[production]'
-      - name: Assume least-privilege S3 archive role through GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      - name: Install FieldShift
+        run: python -m pip install -e .
       - name: Fetch, quality-check and publish completed daily years
         env:
-          FIELD_SHIFT_ARCHIVE_S3_BUCKET: ${{ vars.FIELD_SHIFT_ARCHIVE_S3_BUCKET }}
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           REGION: ${{ matrix.region }}
           START_YEAR: ${{ inputs.start_year }}
           END_YEAR: ${{ inputs.end_year }}
@@ -125,5 +109,5 @@ jobs:
             echo "## $REGION"
             echo "- Requested years: $START_YEAR–$END_YEAR"
             echo "- Job result: $JOB_STATUS"
-            echo "- S3 key prefix: power-history/$REGION/"
+            echo "- Google Drive path: power-history/$REGION/"
           } >> "$GITHUB_STEP_SUMMARY"
