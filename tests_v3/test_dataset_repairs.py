@@ -228,7 +228,7 @@ def test_pipeline_falls_back_to_appeears_when_gee_smap_is_unavailable(monkeypatc
     records = []
     remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
     assert appeears_calls and appeears_calls[0]["source_keys"] is None
-    assert [row for row in records if row["name"] == "NASA SMAP"][0]["status"] == "available"
+    assert next(row for row in records if row["name"] == "NASA SMAP")["status"] == "available"
     assert any(row.smap_surface_m3_m3 == pytest.approx(0.2) for row in remote)
 
 
