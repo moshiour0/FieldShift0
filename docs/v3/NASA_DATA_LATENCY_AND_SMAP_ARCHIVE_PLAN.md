@@ -266,19 +266,17 @@ The original request must be immutable. A recheck/retry operates on the saved sn
 - Repository: `moshiour0/FieldShift0`.
 - PR #1: https://github.com/moshiour0/FieldShift0/pull/1
 - Working branch: `feat/krishinexus-real-data-school-lab`.
-- Inspected branch head: `eb2b2ea804bc1c16b567fe1b75d62dff752774ce`.
+- Initial inspected branch head for this roadmap snapshot: `eb2b2ea804bc1c16b567fe1b75d62dff752774ce`. Later implementation and current branch head are recorded in Section 7.6.
 - PR #1 is still open, Draft, and unmerged.
 - Production/main baseline recorded by PR: `a0f6cb14cdc0cc65f1bbbe84cb2c8d9e405c728f`.
 - Keep the PR Draft/Open/Unmerged until explicit user approval.
 
-### 7.2 Current CI and Vercel source mismatch
+### 7.2 Historical baseline at initial inspection (superseded by Section 7.6)
 
 - GitHub Actions workflow run inspected for current head: run ID `42602954531`, run #395, completed successfully.
 - Python 3.11 and 3.12 jobs both passed pytest, compileall, Ruff, and mypy.
-- Current-head combined GitHub status still reports Vercel failure tied to the free-plan deployment rate-limit link.
-- Newest READY branch Preview found during inspection: `https://field-shift0-1g7c0j5cv.vercel.app`, deployment `dpl_5iffh8Bjigjp5Z9JharvKJEtYeWP`, commit `2a88baa94cf00bf92a153feb801ca14996598a13`.
-- That deployment is READY, but its SHA is **not** the inspected branch head `eb2b2ea...`. Do not call it a deployment of the current head.
-- Earlier Vercel bot comment reports the free-plan API deployment rate limit (more than 100 deployments/day). Treat it as a platform quota issue, not a code-build failure.
+- At that historical inspection point, the branch's Vercel check failed due the free-plan daily deployment-rate limit. Later a runtime-bearing Preview was successfully deployed; see Section 7.6 for the READY deployment SHA and smoke-test results.
+- Do not use this initial Vercel failure as the current deployment status.
 
 ### 7.3 Supabase project / existing durable queue
 
@@ -291,7 +289,7 @@ The original request must be immutable. A recheck/retry operates on the saved sn
 - The current database contained no queued worker jobs when inspected.
 - No real signed-in end-to-end user analysis has yet been demonstrated in the continuity record. The temporary worker probe previously ran and its synthetic user/run/job/source/result/event were deleted after verification.
 - Supabase Security Advisor showed one warning for the intentionally owner-checked `public.request_analysis_run_recheck(uuid)` SECURITY DEFINER RPC. The function must remain owner-scoped and non-publicly executable; review whether it should be moved behind a private helper/wrapper.
-- Supabase Performance Advisor showed duplicate permissive worker RLS policies on `private.analysis_run_jobs`, and repeated per-row evaluation of worker token/header expressions. Consolidate equivalent policies in a reviewed migration and use an initplan-safe expression. Do not weaken the worker-token restriction.
+- The initial Supabase Performance Advisor inspection found duplicate permissive worker RLS policies. They were removed in applied migrations; remaining initplan warnings and current policy state are recorded in Section 7.6. Do not weaken the worker-token restriction.
 - Supabase Health Advisor returned no findings during inspection.
 
 ### 7.4 Current code findings that drive the next implementation
@@ -315,9 +313,9 @@ The original request must be immutable. A recheck/retry operates on the saved sn
   - `REGIONS` defines nine representative coordinates.
   - Those anchors cannot be used as exact data for arbitrary user coordinates.
 - `src/fieldshift/v3/google_drive.py`:
-  - The private Drive adapter already supports OAuth refresh, object get/put, and resumable uploads.
-  - Existing POWER archive uses read-back verification; satellite result cache should reuse the same security/integrity discipline.
-- `private.dataset_cache` is present but not yet populated by an AppEEARS-to-Drive source-cache workflow.
+  - The private Drive adapter supports OAuth refresh, object get/put, and resumable uploads.
+  - The SMAP and AppEEARS cache writers now use SHA-256 and remote read-back verification; a real NASA-derived object round-trip remains unverified in Preview.
+- `private.dataset_cache` remains empty and is not the storage layer for the Drive object cache; cache provenance is persisted in `analysis_run_sources`.
 
 ## 7.5 Implementation progress — 2026-11-09 (branch head `6ddf3aeead2d81a8b22973d50fefab160249b308`)
 
@@ -394,6 +392,14 @@ The migration has been applied successfully to the non-production Supabase proje
 - `20261109124329_deduplicate_worker_queue_policies.sql`
 - `20261109124402_cache_worker_rls_header.sql`
 
+### Protected Preview smoke test — 2026-11-09
+
+- Runtime Preview: `https://field-shift0-igfpm2kn9.vercel.app`, deployment `dpl_ASLoBnTYWcTGCAPbwbZfZ2StDL51`, source commit `62d76f38ced0a67ca479150bc36d447f5103a83c`.
+- Protected Preview `GET /api/auth/config` returned HTTP 200: `configured=true`, provider `email_magic_link`, and the FieldShift0 Supabase project URL/key were configured. Key values are not reproduced here.
+- A safe idle worker tick was invoked from the FieldShift0 Supabase project only after confirming zero queue jobs in `queued`, `retrying`, or `running` states. It used the existing Vault-backed worker token and Vercel protection-bypass secret. The Preview returned HTTP 200 with `processed=false` and “No queued analysis job is ready.”
+- This validates protected Preview routing, Vercel bypass, worker token validation, Supabase connectivity and the empty-queue claim path. It does **not** prove a real authenticated user submission, NASA task execution, or a live Drive cache write/read.
+- The Vercel Hobby runtime-log API returned a 400 retention-limit response for the requested one-hour window. Treat this as an observability-plan limitation, not an application runtime error.
+
 ### Supabase queue-policy cleanup and live DB state
 
 - Duplicate anonymous worker SELECT/UPDATE RLS policies on `private.analysis_run_jobs` have been removed. Exactly one token-gated SELECT policy and one token-gated UPDATE policy remain, plus the independent `service_role` policy.
@@ -407,15 +413,19 @@ The migration has been applied successfully to the non-production Supabase proje
 ### CI and deployment status
 
 - Code-level verification on commit `fb8b512f6515e22b6f762afb5decad042489ffb2`: Python 3.11 and 3.12 each report **169 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff, and mypy (34 source files) pass.
-- Code and workflow verification on commit `9f4d047d4624580e15ff12f07c8ada082650ce60`: GitHub Actions run #506 and its matching run #507 both pass. Python 3.11 and 3.12 each report **170 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff and mypy (34 source files) pass.
-- The current branch can advance after this document commit; future sessions must compare the exact current PR head with the newest completed CI SHA rather than assume this earlier result covers later commits.
+- Code verification on runtime commit `9f4d047d4624580e15ff12f07c8ada082650ce60`: GitHub Actions runs #506 and #507 both pass. Python 3.11 and 3.12 each report **170 passed, one existing Starlette/httpx TestClient deprecation warning**; compileall, strict Ruff and mypy (34 source files) pass.
+- Backfill workflow and documentation commits after that runtime commit passed CI: runs #508 and #509 both completed successfully for PR head `9c437a9196d46356a7dccb4ab1a6210458827bc4`.
+- PR #1 remains Draft/Open/Unmerged. The exact branch head must still be rechecked before any future source edit or deploy.
 - PR #1 remains Draft/Open/Unmerged.
-- The newest READY Preview seen during this inspection is still an older source SHA (`8cdd44e7ea293e2105c354556d5e73c0b7c70896`), not the current branch head. No current-head Preview has yet demonstrated this new cache-only/retry logic. The earlier Vercel free-plan deployment-rate limit remains a possible blocker; confirm with live deployment metadata before retrying.
+- Runtime-bearing READY Preview: `https://field-shift0-igfpm2kn9.vercel.app`, deployment `dpl_ASLoBnTYWcTGCAPbwbZfZ2StDL51`, source commit `62d76f38ced0a67ca479150bc36d447f5103a83c`. The runtime code from `9f4d047...` is included; subsequent commits through the exact PR head changed only the manual workflow and documentation, not runtime application code.
+- Protected Preview `GET /api/auth/config` returned HTTP 200 with `configured=true` and provider `email_magic_link`.
+- A safe idle worker probe was submitted from the FieldShift0 Supabase project only after confirming zero non-terminal jobs (`queued`, `retrying`, `running`). The Vault-backed request to `/api/internal/worker/tick` returned HTTP 200 with `processed=false` and `No queued analysis job is ready.` No user analysis was processed.
+- The Vercel Hobby runtime-log API returned a 400 retention-limit response for the requested one-hour window; this is an observability-plan limitation, not an application error.
 - No Production deploy, Production environment change, billing change, or PR merge was performed.
 
 ### Still not proven — do not mark these as complete
 
-1. **Real Drive round-trip:** the current automated cache tests mock the Drive adapter. A live deployed current-head Preview must upload a real QA-checked SMAP/HLS/MODIS object, read it back, compare bytes/SHA-256, and then prove a cold-instance cache hit.
+1. **Real Drive round-trip:** the current automated cache tests mock the Drive adapter. A deployed Preview must upload a real NASA-derived QA-checked SMAP/HLS/MODIS object, read it back, compare bytes/SHA-256, and then prove a cold-instance cache hit.
 2. **Nationwide gridded archive:** the current GEE cache is exact-point data for one selected coordinate per cache key. It is not a raster/area archive for arbitrary Bangladesh fields. Nine reference points alone are not enough. A verified Bangladesh boundary/operational tile geometry and a 2025 SMAP area/tile pilot are still required before describing the archive as Bangladesh-wide.
 3. **Actual 2016–2025 prefetch:** no ten-year national SMAP data backfill has been dispatched. The one-year-per-point cache mechanism is a reusable foundation, not a finished nationwide backfill.
 4. **Live AppEEARS provider-resume:** current code is CI-verified, but a current-head Preview retry has not proven the exact persisted AppEEARS task IDs are reused from Supabase without duplicate task submission.
