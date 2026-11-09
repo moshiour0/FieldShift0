@@ -289,7 +289,7 @@ def _smap_daily_point_timeseries_window(
         # A verified shared/local cache is still eligible above; on a miss,
         # return a durable pending state and let the next worker attempt fetch.
         return _smap_result(
-            (), expected, retrieval_mode="cache_miss", retry_after_seconds=3600,
+            (), expected, retrieval_mode="cache_miss", retry_after_seconds=900,
         )
 
     ee = _initialise_ee()
