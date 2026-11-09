@@ -68,3 +68,26 @@ def test_drive_upload_updates_existing_file_id(monkeypatch: pytest.MonkeyPatch) 
         sha256=hashlib.sha256(data).hexdigest(),
     )
     assert captured["file_id"] == "existing"
+def test_large_drive_upload_uses_resumable_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict[str, str]]] = []
+
+    def fake_request(method: str, url: str, *, body=None, headers=None):
+        calls.append((method, url, dict(headers or {})))
+        if method == "POST":
+            return b"", {"Location": "https://upload.example/session"}
+        return b'{"id":"large-file","name":"large.json"}', {}
+
+    monkeypatch.setattr(google_drive, "_auth_request", fake_request)
+    result = google_drive._upload(
+        file_id=None,
+        parent_id="root",
+        name="large.json",
+        content=b"x" * (5 * 1024 * 1024 + 1),
+    )
+    assert result["id"] == "large-file"
+    assert len(calls) == 2
+    assert calls[0][0] == "POST"
+    assert "uploadType=resumable" in calls[0][1]
+    assert calls[1][0] == "PUT"
+    assert calls[1][1] == "https://upload.example/session"
+    assert calls[1][2]["Content-Length"] == str(5 * 1024 * 1024 + 1)
