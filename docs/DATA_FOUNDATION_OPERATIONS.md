@@ -28,9 +28,18 @@ The root folder is created by the one-time OAuth bootstrap script. The archive i
 4. Create an OAuth 2.0 Client ID of type **Desktop app**. Do not use a service account. Drive ownership and storage quota are attached to the authorized Google account.
 5. For unattended weekly refresh, set the OAuth app publishing status to **In production** before generating the final refresh token. If you leave an External app in **Testing**, Google expires the authorization (including its refresh token) after seven days, so you would have to re-authorize weekly. This is a single-owner personal integration (well under 100 users) and uses the non-sensitive `drive.file` scope; Google says personal-use apps under 100 users can operate without OAuth verification, although an unverified-app warning may appear and must be acknowledged during your own consent flow. Do not request the broad `drive` or `drive.readonly` scopes.
 6. Copy the Client ID and Client Secret.
-7. On a trusted local computer with Python 3.11+, run:
-   `python scripts/google_drive_oauth.py`
-8. Complete Google authorization in the browser. The script creates a private folder named **FieldShift0 Archive** and prints the four values to add as secrets. It does not write credentials to the repository.
+7. **Android / Termux setup (no PC required):** install the current Termux build from one official source (F-Droid or the Termux GitHub releases; do not mix APK sources). Android 7+ is supported. In Termux run:
+   ```bash
+   pkg update && pkg upgrade -y
+   pkg install python git termux-tools -y
+   git clone --single-branch --branch feat/krishinexus-real-data-school-lab https://github.com/moshiour0/FieldShift0.git
+   cd FieldShift0
+   python scripts/google_drive_oauth.py
+   ```
+   If the repository is already cloned, enter its folder, fetch the branch and check it out instead of cloning again.
+8. Enter the Desktop OAuth Client ID and Client Secret when prompted. The script uses `termux-open-url` to open Android Chrome; if automatic launch is unavailable, copy the printed authorization URL into Chrome on the same phone. Approve access using the Google account holding the Drive storage. **Keep Termux running in the foreground/session** while Chrome opens: Google redirects to the `127.0.0.1` listener running inside Termux. Return to Termux after the browser confirms authorization. The script creates a private folder named **FieldShift0 Archive** and prints the four values to add as secrets. It does not write credentials to the repository.
+
+   Important OAuth distinction: create a Google **Desktop app** client, not an Android client. Google continues to support loopback redirects for Desktop OAuth clients but has deprecated that redirect method for Android OAuth client types. Termux is a command-line runtime on Android, not a native Android OAuth app; the browser-to-Termux loopback callback should be tested on the phone before treating setup as complete. Do not use Google's deprecated manual copy/paste authorization-code (OOB) flow.
 
 ## Required secrets
 
