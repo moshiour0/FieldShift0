@@ -225,7 +225,7 @@ async function initAccount(){
     const fragment=new URLSearchParams(window.location.hash.replace(/^#/,''));
     const accessToken=fragment.get('access_token');
     const authError=fragment.get('error_description')||fragment.get('error_code');
-    if(authError)toast(decodeURIComponent(authError.replace(/\+/g,' ')));
+    if(authError){toast(authError);history.replaceState(null,document.title,window.location.pathname+window.location.search);}
     if(accessToken){
       storeAuthSession({
         access_token:accessToken,
@@ -289,7 +289,7 @@ async function loadSavedRun(runId){
     data.run.status_message=detail.run.status_message||data.run.status_message;
     state.lastPayload={...(detail.run.request_payload||{}),client_request_id:detail.run.client_request_id};
     state.clientRequestId=detail.run.client_request_id;
-    applyData(data);closeDrawer();scrollToId('evidence-section');
+    applyData(data);scheduleEvidenceRefresh(data,state.pollVersion);closeDrawer();scrollToId('evidence-section');
     toast('Saved analysis restored from your account');
   }catch(e){toast(e.message)}
 }
