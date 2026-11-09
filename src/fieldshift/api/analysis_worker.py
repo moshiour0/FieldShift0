@@ -19,6 +19,10 @@ from typing import Any
 class WorkerAPIError(RuntimeError):
     """A safe, non-secret worker/Data API failure."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 def _settings(worker_token_override: str | None = None) -> tuple[str, str, str]:
     base_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
@@ -52,8 +56,9 @@ def _rest_json(
         data=body,
         method=method,
         headers={
+            # The publishable key identifies the project. With no user JWT,
+            # PostgREST applies the anon role and the token-gated worker RLS.
             "apikey": publishable_key,
-            "Authorization": f"Bearer {publishable_key}",
             "x-fieldshift-worker": worker_token,
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -65,7 +70,7 @@ def _rest_json(
             return json.loads(raw.decode("utf-8")) if raw else None
     except urllib.error.HTTPError as exc:
         # Never echo remote response bodies: they may contain provider internals.
-        raise WorkerAPIError(f"Supabase worker API returned HTTP {exc.code}.") from exc
+        raise WorkerAPIError(f"Supabase worker API returned HTTP {exc.code}.", status_code=exc.code) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise WorkerAPIError("Supabase worker API could not be reached.") from exc
     except json.JSONDecodeError as exc:
@@ -73,7 +78,14 @@ def _rest_json(
 
 
 def _retry_after_seconds(items: list[dict[str, Any]]) -> int | None:
-    pending = [item for item in items if item.get("status") in {"pending", "retrying"}]
+    pending = [
+        item for item in items
+        if item.get("status") in {"pending", "retrying"}
+        or (
+            item.get("status") in {"partial", "unavailable"}
+            and item.get("retry_after_seconds") is not None
+        )
+    ]
     if not pending:
         return None
     # Respect the slowest provider-specific Retry-After so retries do not
@@ -120,8 +132,8 @@ def _source_records(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "coverage_end": item.get("data_end_date"),
             "coverage_fraction": item.get("coverage_fraction"),
             "next_retry_at": item.get("next_retry_at"),
-            "last_error_code": "PROVIDER_PENDING" if status in {"pending", "retrying"} else "SOURCE_ERROR" if safe_error else None,
-            "last_error_message": safe_error,
+            "last_error_code": "PROVIDER_PENDING" if status in {"pending", "retrying", "partial"} else "SOURCE_ERROR" if safe_error else None,
+            "last_error_message": "The provider has not returned a complete data set." if safe_error else None,
             "quality": {
                 key: item[key] for key in ("quality_status", "quality_note", "confidence", "coverage")
                 if item.get(key) is not None
@@ -202,10 +214,24 @@ def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict
     return saved
 
 
-def _fail_job(job_id: str, attempts: int, error_code: str, worker_token: str) -> None:
-    # The SQL function enforces max_attempts and validates the active lease.
+def _is_retryable_worker_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError)):
+        return True
+    if isinstance(exc, WorkerAPIError):
+        return exc.status_code in {408, 425, 429} or bool(exc.status_code and exc.status_code >= 500)
+    name = type(exc).__name__.lower()
+    return "retryable" in name or name in {"apiexception", "serviceunavailable"}
+
+
+def _fail_job(job_id: str, attempts: int, exc: Exception, worker_token: str) -> None:
+    # Retry transient transport/provider failures only. Invalid requests, auth
+    # failures and scientific validation errors are recorded as terminal.
+    retryable = _is_retryable_worker_error(exc)
     delay = min(21600, 900 * (2 ** max(0, attempts - 1)))
-    retry_at = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+    retry_at = (
+        (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+        if retryable else None
+    )
     try:
         _rest_json(
             "rpc/worker_fail_analysis_job",
@@ -213,7 +239,7 @@ def _fail_job(job_id: str, attempts: int, error_code: str, worker_token: str) ->
             payload={
                 "p_worker_token": worker_token,
                 "p_job_id": job_id,
-                "p_error_code": error_code[:80],
+                "p_error_code": type(exc).__name__[:80],
                 "p_retry_at": retry_at,
             },
             timeout=20,
@@ -248,5 +274,5 @@ def process_one(worker_token: str | None = None) -> dict[str, Any]:
             "next_retry_at": saved.get("next_retry_at"),
         }
     except Exception as exc:
-        _fail_job(job_id, int(job.get("attempts") or 1), type(exc).__name__, configured_token)
+        _fail_job(job_id, int(job.get("attempts") or 1), exc, configured_token)
         raise WorkerAPIError("The analysis worker could not complete this job; the lease will retry it safely.") from exc
