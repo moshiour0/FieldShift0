@@ -145,6 +145,7 @@ def _source_records(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 key: item[key] for key in (
                     "retrieval_mode", "citation", "temporal_resolution",
                     "spatial_resolution", "data_start_date", "data_end_date",
+                    "archive_cache_status", "archive_object_key", "archive_sha256",
                 ) if item.get(key) is not None
             },
         })
@@ -189,17 +190,31 @@ def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict
         (datetime.now(UTC) + timedelta(seconds=retry_seconds)).isoformat()
         if retry_seconds is not None else None
     )
-    # Never label a result FINAL while a provider has a scheduled retry.
-    # Keep the current evidence snapshot, but expose it as waiting_for_data.
-    status = (
-        "waiting_for_data"
-        if retry_at is not None and engine_status in {"final_ready", "final_with_gaps"}
-        else engine_status
-    )
+    pending_items = [
+        item for item in items
+        if item.get("status") in {"pending", "retrying"}
+        or (item.get("status") in {"partial", "unavailable"} and item.get("retry_after_seconds") is not None)
+    ]
+    required_pending = [item for item in pending_items if bool(item.get("required"))]
+    optional_pending = [item for item in pending_items if not bool(item.get("required"))]
+
+    # A slow optional satellite source must not block a useful first revision.
+    # Required-source gaps still block final readiness. The retry is retained
+    # in either case so the same durable run can be enriched automatically.
+    if retry_at is not None and required_pending:
+        status = "waiting_for_data"
+    elif retry_at is not None and optional_pending and engine_status in {"final_ready", "final_with_gaps"}:
+        status = "preliminary_ready"
+    else:
+        status = engine_status
     is_final = status in {"final_ready", "final_with_gaps"}
     status_message = str(run.get("status_message") or "Background analysis completed.")
-    if status == "waiting_for_data" and engine_status in {"final_ready", "final_with_gaps"}:
-        status_message = "A preliminary evidence snapshot is available. Some provider data is still pending and will be checked again automatically."
+    if required_pending:
+        names = ", ".join(str(item.get("name") or item.get("source_key") or "required source") for item in required_pending)
+        status_message = f"Required evidence is still pending ({names}). The saved run will be checked again automatically."
+    elif optional_pending and status == "preliminary_ready":
+        names = ", ".join(str(item.get("name") or item.get("source_key") or "satellite source") for item in optional_pending)
+        status_message = f"A preliminary analysis is available from the evidence currently ready. Optional evidence is still processing ({names}); this run will be updated automatically."
 
     result_payload = copy.deepcopy(result)
     stored_run = result_payload.setdefault("run", {})
