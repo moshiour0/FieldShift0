@@ -148,6 +148,47 @@ def account_runs(request: Request) -> dict[str, Any]:
     return {"runs": rows if isinstance(rows, list) else []}
 
 
+@app.post("/api/account/runs/{run_id}/recheck")
+def account_run_recheck(run_id: str, request: Request) -> dict[str, Any]:
+    import uuid
+
+    try:
+        safe_run_id = str(uuid.UUID(run_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=404, detail="Saved analysis not found.") from exc
+
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to check this saved analysis again.")
+
+    try:
+        result = supabase_auth.request_analysis_run_recheck(
+            access_token=str(token),
+            run_id=safe_run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 404, 409, 422, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    return {
+        "queued": not bool(result.get("already_queued")),
+        "already_queued": bool(result.get("already_queued")),
+        "run": {
+            "id": str(result["run_id"]),
+            "status": str(result.get("status") or "waiting_for_data"),
+            "stage": str(result.get("stage") or "queued"),
+            "status_message": (
+                "A new evidence check is queued. Your previous saved result remains available."
+                if not result.get("already_queued")
+                else "An evidence check is already queued or running for this saved analysis."
+            ),
+        },
+        "available_at": result.get("available_at"),
+    }
+
+
 @app.get("/api/account/runs/{run_id}")
 def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
     import uuid
