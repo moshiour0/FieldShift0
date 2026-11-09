@@ -290,6 +290,41 @@ def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkey
     assert any(row.modis_et_mm == pytest.approx(2.0) for row in remote)
 
 
+def test_initial_worker_defers_smap_even_when_only_appeears_is_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: False)
+    app_result = appeears.AppEEARSResult(
+        remote=(
+            RemoteDay(START, ndvi=0.61, source="NASA HLS"),
+            RemoteDay(START, modis_et_mm=2.1, source="NASA MODIS MOD16"),
+        ),
+        datasets=(
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    calls = []
+
+    def sampled_products(*args, **kwargs):
+        calls.append(kwargs)
+        return app_result
+
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", sampled_products)
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    remote = pipeline._load_optional_remote(
+        tmp_path, records, field, START, END, tmp_path, allow_live_smap=False,
+    )
+
+    assert calls and calls[0]["source_keys"] == {"hls_vi", "modis_et"}
+    smap = next(row for row in records if row["name"] == "NASA SMAP")
+    assert smap["status"] == "pending"
+    assert smap["retry_after_seconds"] == 900
+    assert "deferred" in smap["coverage"]
+    assert any(row.ndvi == pytest.approx(0.61) for row in remote)
+    assert any(row.modis_et_mm == pytest.approx(2.1) for row in remote)
+
+
 def test_pipeline_falls_back_to_appeears_when_gee_smap_is_unavailable(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
     monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
