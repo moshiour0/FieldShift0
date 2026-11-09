@@ -152,7 +152,7 @@ def test_modis_sensor_bit_and_short_year_end_composite():
 def test_smap_long_date_windows_use_reusable_366_day_chunks(monkeypatch, tmp_path):
     calls = []
 
-    def chunk(lat, lon, start, end, cache_dir):
+    def chunk(lat, lon, start, end, cache_dir, *, allow_live_query=True):
         calls.append((start, end))
         expected = (end - start).days + 1
         rows = tuple(
