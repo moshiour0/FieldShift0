@@ -758,6 +758,7 @@ def _sample_source(
     definition: SourceDefinition, token: str, products: list, lat: float, lon: float,
     start: date, end: date, cache_dir: Path, timeout: int, max_wait_seconds: int,
     task_index: dict[str, Any] | None = None,
+    existing_task_id: str | None = None,
 ) -> AppEEARSResult:
     key, name = definition["key"], definition["name"]
     selections = discover_layers(token, timeout, source_key=key, start=start, end=end, products=products, cache_dir=cache_dir)
@@ -803,6 +804,21 @@ def _sample_source(
                     task_id = ""
         except (OSError, ValueError, TypeError, KeyError):
             pass
+        if not task_id and existing_task_id:
+            # Prefer the exact task ID persisted with this run. A stale or
+            # expired ID falls through to the account task-list discovery path.
+            try:
+                candidate = _safe_json_request(
+                    f"task/{urllib.parse.quote(existing_task_id, safe='-')}",
+                    token=token,
+                    timeout=timeout,
+                )
+                if _task_is_reusable(candidate):
+                    task_id = existing_task_id
+                    task = candidate
+            except AppEEARSDataError as exc:
+                if "HTTP 404" not in str(exc):
+                    raise
         if not task_id:
             existing = _find_recent_task(token, task_name, selections, timeout=timeout, task_index=task_index)
             task_id = str(existing.get("task_id", "")) if existing else ""
@@ -864,8 +880,15 @@ def _sample_source(
 
 
 def appeears_point_timeseries(
-    lat: float, lon: float, start: date, end: date, *, cache_dir: str | Path,
-    timeout: int = 20, max_wait_seconds: int | None = None,
+    lat: float,
+    lon: float,
+    start: date,
+    end: date,
+    *,
+    cache_dir: str | Path,
+    timeout: int = 20,
+    max_wait_seconds: int | None = None,
+    existing_task_ids: dict[str, str] | None = None,
 ) -> AppEEARSResult:
     """One shared token, independent SMAP/MODIS/HLS tasks, resumable across requests."""
     if not credentials_configured():
@@ -893,7 +916,28 @@ def appeears_point_timeseries(
 
     def sample(definition):
         try:
-            return _sample_source(definition, token, products, lat, lon, start, end, Path(cache_dir), timeout, max(0, min(30, wait)), task_index)
+            task_aliases = {
+                "smap": "nasa_smap",
+                "modis_et": "nasa_modis_mod16",
+                "hls_vi": "nasa_hls",
+            }
+            saved_task_id = (existing_task_ids or {}).get(definition["key"])
+            if not saved_task_id:
+                saved_task_id = (existing_task_ids or {}).get(task_aliases.get(definition["key"], ""))
+            return _sample_source(
+                definition,
+                token,
+                products,
+                lat,
+                lon,
+                start,
+                end,
+                Path(cache_dir),
+                timeout,
+                max(0, min(30, wait)),
+                task_index,
+                existing_task_id=saved_task_id,
+            )
         except Exception as exc:
             return AppEEARSResult((), (failure(definition, exc),))
 
