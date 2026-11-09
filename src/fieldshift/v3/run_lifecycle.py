@@ -52,23 +52,23 @@ def classify_run_readiness(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         name = str(item.get("name") or item.get("source_name") or "Evidence source")
         key = str(item.get("source_key") or source_key_for(name))
         status = str(item.get("status") or "unknown").lower()
-        required = bool(item.get("required", key in REQUIRED_SOURCE_KEYS))
+        is_required = bool(item.get("required", key in REQUIRED_SOURCE_KEYS))
         normalized.append({
             "name": name,
             "source_key": key,
             "status": status,
-            "required": required,
+            "required": is_required,
         })
 
-    required = [item for item in normalized if item["required"]]
-    core_ready = bool(required) and all(item["status"] == "available" for item in required)
+    required_items = [item for item in normalized if item["required"]]
+    core_ready = bool(required_items) and all(item["status"] == "available" for item in required_items)
     pending = [item for item in normalized if item["status"] in PENDING_STATUSES]
     gaps = [
         item for item in normalized
         if item["status"] in GAP_STATUSES
         or item["status"] not in PENDING_STATUSES | GAP_STATUSES | {"available", "skipped"}
     ]
-    missing_required = [item for item in required if item["status"] != "available"]
+    missing_required = [item for item in required_items if item["status"] != "available"]
 
     if pending or not core_ready:
         status = "preliminary_ready"
