@@ -373,3 +373,36 @@ When continuing this project:
 - NASA POWER Daily API: https://power.larc.nasa.gov/docs/services/api/temporal/daily/
 - NASA AppEEARS API: https://appeears.earthdatacloud.nasa.gov/api/
 - NASA GPM IMERG V07 dataset (Earth Engine): https://developers.google.com/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_V07
+
+
+## 10. Continuation update — 2026-11-09
+
+### Latest lifecycle implementation
+
+- Latest branch head: `79421092c83cbb961b5e724da0e833eb463faa34`.
+- `classify_run_readiness(..., result_available=False)` now distinguishes:
+  - `waiting_for_data` when the analysis has no result and pending or required core evidence is still missing.
+  - `running` when source readiness has passed but the result is still being computed.
+- A preliminary result with required NASA POWER evidence not ready is explicitly labelled `DIAGNOSTIC PREVIEW · NOT FOR FIELD DECISIONS` in the UI.
+- New lifecycle tests cover both no-result states.
+- Push CI run `42582333784` and PR CI run `42582339898`: success.
+- Python 3.11 and 3.12: 129 passed, 1 existing Starlette/httpx TestClient deprecation warning; compileall, Ruff and mypy passed (32 source files).
+- Vercel Preview for exact SHA `79421092c83cbb961b5e724da0e833eb463faa34`: READY at https://field-shift0-6fu9kk0jp.vercel.app.
+- PR #1 remains open, Draft, and unmerged. Production remains unchanged.
+
+### Supabase provisioning attempt and current blocker
+
+- The selected Supabase organization is `moshiour's Org`; the requested project name is `FieldShift0`, in `ap-south-1` (Mumbai).
+- Supabase quoted project creation at $0/month on the current Free plan, but the create request was rejected because the account owner has already consumed the two-active-Free-project limit with `SARGuardian_Dynamic` and `SARGuardian-Monorepo`.
+- No project was created. No existing project was paused/deleted. No organization plan was upgraded. No migration was applied and no Vercel Supabase environment variables were added.
+- User approval is still required for one of two actions: pause one of those existing active projects, or authorize an organization plan upgrade after reviewing the exact billing impact. Do not select or execute either action without that decision.
+- Supabase's current project-wide billing rules mean a Pro plan applies to every project in that organization; separate project compute is billed in addition to the plan. Check the current bill estimate before any upgrade.
+- Supabase changelog states that, from 2026-10-30, newly created public tables require explicit grants before Data API access. This migration already includes explicit, least-privilege grants: browser roles can read only owner-scoped run records and edit their own profile; cache/jobs remain backend-only; `service_role` has backend privileges. Keep these grants in the migration.
+
+### Next safe actions
+
+1. Resolve the Free active-project limit with explicit user direction; do not modify SARGuardian projects or billing without it.
+2. Create `FieldShift0` in `ap-south-1`, then verify project identity, health, tables and migration history.
+3. Apply the reviewed migration only to that exact new project; verify RLS, explicit grants, indexes, constraints, and Supabase Security/Performance Advisors.
+4. Add only Preview-scoped Supabase URL and publishable key, plus server-only secret credentials. Never expose the secret/service-role key to browser code.
+5. Implement and test Auth/JWT validation, owner-scoped backend routes, durable run submission, My Runs and resume-on-return before provider workers.
