@@ -216,6 +216,7 @@ def _load_optional_remote(
     cache_dir: Path,
     allow_live: bool = True,
     provider_task_ids: dict[str, str] | None = None,
+    allow_live_smap: bool = True,
 ) -> tuple:
     remote: list[Any] = []
     loaders = [
@@ -271,6 +272,7 @@ def _load_optional_remote(
             try:
                 smap_result = smap_daily_point_timeseries(
                     field.lat, field.lon, start, end, cache_dir=cache_dir,
+                    allow_live_query=allow_live_smap,
                 )
                 remote.extend(smap_result.rows)
                 expected_smap_days = (end - start).days + 1
@@ -428,6 +430,7 @@ def load_scenarios(
     start_date=None,
     end_date=None,
     provider_task_ids: dict[str, str] | None = None,
+    allow_live_smap: bool = True,
 ) -> list[Scenario]:
     observation_start, observation_end = evidence_dates(start_date, end_date, year=year)
     input_dir = input_dir or (ROOT / "data" / "v3")
@@ -519,6 +522,7 @@ def load_scenarios(
         satellite_cache_dir,
         allow_live=nasa_ok,
         provider_task_ids=provider_task_ids,
+        allow_live_smap=allow_live_smap,
     )
     remote = _merge_remote(remote_rows)
     baseline_scenario = Scenario(
@@ -758,6 +762,7 @@ def run_v3(
     start_date: str | None = None,
     end_date: str | None = None,
     provider_task_ids: dict[str, str] | None = None,
+    allow_live_smap: bool = True,
 ) -> EngineRun:
     observation_start, observation_end = evidence_dates(start_date, end_date, year=year)
     if start_date is not None:
@@ -923,6 +928,7 @@ def run_v3(
         start_date=observation_start,
         end_date=observation_end,
         provider_task_ids=provider_task_ids,
+        allow_live_smap=allow_live_smap,
     )
     rotations, rejected = _unique_rotations(crops, cfg, field, year)
     rotation_map = {r.rotation_id: r for r in rotations}
