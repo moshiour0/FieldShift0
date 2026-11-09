@@ -105,23 +105,16 @@ def validate_days(days: tuple[WeatherDay, ...], start: date, end: date) -> None:
             raise ValueError("Only actual POWER-derived records belong in the archive")
 
 
-def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
-    path = _path(region_id, year)
-    payload = None
-    if google_drive.configured():
-        try:
-            archived = google_drive.get_object(f"power-history/{region_id}/{year}.json")
-        except google_drive.GoogleDriveError as exc:
-            raise RuntimeError("Google Drive history archive unavailable") from exc
-        if archived is not None:
-            try:
-                payload = json.loads(archived.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise ValueError("Google Drive history object is not valid JSON") from exc
-    if payload is None and path.exists():
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload is None:
-        raise FileNotFoundError(str(path))
+def _decode_year_payload(
+    region_id: str,
+    year: int,
+    raw: bytes,
+) -> tuple[tuple[WeatherDay, ...], dict]:
+    """Decode and validate an exact archive object returned by a storage provider."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("History archive object is not valid JSON") from exc
     region = region_by_id(region_id)
     if (payload.get("region") != region or payload.get("year") != year
             or payload.get("schema_version") != 1 or _digest(payload["days"]) != payload.get("sha256")):
@@ -132,32 +125,70 @@ def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
     return days, {k: v for k, v in payload.items() if k != "days"}
 
 
+def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
+    path = _path(region_id, year)
+    if google_drive.configured():
+        try:
+            archived = google_drive.get_object(f"power-history/{region_id}/{year}.json")
+        except google_drive.GoogleDriveError as exc:
+            raise RuntimeError("Google Drive history archive unavailable") from exc
+        if archived is not None:
+            return _decode_year_payload(region_id, year, archived)
+    if path.exists():
+        return _decode_year_payload(region_id, year, path.read_bytes())
+    raise FileNotFoundError(str(path))
+
+
 def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
-    """CLI-only mutation: resumable one-year download with a strict quality gate."""
+    """CLI-only mutation with local and remote byte-for-byte verification."""
     region = region_by_id(region_id)
     path = _path(region_id, year)
     if date(year, 12, 31) >= date.today():
         raise ValueError("Only completed calendar years can be archived")
+    archive_key = f"power-history/{region_id}/{year}.json"
     if not refresh:
         try:
             if google_drive.configured():
-                archive_key = f"power-history/{region_id}/{year}.json"
                 remote_payload = google_drive.get_object(archive_key)
                 if remote_payload is not None:
-                    _, meta = read_year(region_id, year)
-                    return {**meta, "retrieval_mode": "google_drive"}
+                    remote_days, meta = _decode_year_payload(region_id, year, remote_payload)
+                    return {
+                        **meta,
+                        "daily_records": len(remote_days),
+                        "retrieval_mode": "google_drive",
+                        "drive_readback_verified": True,
+                    }
                 if path.exists():
-                    # Migrate a validated local archive instead of downloading
-                    # the same historical year from NASA again.
-                    _, local_meta = read_year(region_id, year)
-                    google_drive.put_object(archive_key, path.read_bytes())
-                    _, remote_meta = read_year(region_id, year)
-                    if remote_meta["sha256"] != local_meta["sha256"]:
+                    # Publish a validated local archive, then fetch the object
+                    # directly from Drive. Do not let read_year's local fallback
+                    # turn a missing remote object into a false success.
+                    local_days, local_meta = read_year(region_id, year)
+                    local_bytes = path.read_bytes()
+                    google_drive.put_object(
+                        archive_key,
+                        local_bytes,
+                        sha256=hashlib.sha256(local_bytes).hexdigest(),
+                    )
+                    remote_bytes = google_drive.get_object(archive_key)
+                    if remote_bytes is None or remote_bytes != local_bytes:
+                        raise NasaDataError("Migrated Google Drive archive remote read-back verification failed")
+                    remote_days, remote_meta = _decode_year_payload(region_id, year, remote_bytes)
+                    if remote_meta["sha256"] != local_meta["sha256"] or len(remote_days) != len(local_days):
                         raise NasaDataError("Migrated Google Drive archive checksum verification failed")
-                    return {**remote_meta, "retrieval_mode": "local_archive_published"}
+                    return {
+                        **remote_meta,
+                        "daily_records": len(remote_days),
+                        "retrieval_mode": "local_archive_published",
+                        "drive_readback_verified": True,
+                    }
             else:
-                _, meta = read_year(region_id, year)
-                return {**meta, "retrieval_mode": "local_archive"}
+                local_days, meta = read_year(region_id, year)
+                return {
+                    **meta,
+                    "daily_records": len(local_days),
+                    "retrieval_mode": "local_archive",
+                    "drive_readback_verified": False,
+                }
         except (OSError, ValueError, KeyError, TypeError):
             pass
     start, end = date(year, 1, 1), date(year, 12, 31)
@@ -175,6 +206,7 @@ def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
         raise NasaDataError("Archive directory is not writable")
     try:
         local_payload = json.loads(path.read_text(encoding="utf-8"))
+        local_bytes = path.read_bytes()
     except (OSError, json.JSONDecodeError) as exc:
         raise NasaDataError("Local archive write verification failed") from exc
     if local_payload.get("sha256") != payload["sha256"] or _digest(local_payload.get("days", [])) != payload["sha256"]:
@@ -182,15 +214,35 @@ def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
     if google_drive.configured():
         try:
             google_drive.put_object(
-                f"power-history/{region_id}/{year}.json",
-                path.read_bytes(),
+                archive_key,
+                local_bytes,
+                sha256=hashlib.sha256(local_bytes).hexdigest(),
             )
+            remote_bytes = google_drive.get_object(archive_key)
+            if remote_bytes is None or remote_bytes != local_bytes:
+                raise NasaDataError("Google Drive archive remote read-back verification failed")
+            remote_days, verified = _decode_year_payload(region_id, year, remote_bytes)
         except Exception as exc:
-            raise RuntimeError("Completed-year Google Drive archive could not be published") from exc
+            if isinstance(exc, NasaDataError):
+                raise
+            raise RuntimeError("Completed-year Google Drive archive could not be published and verified") from exc
+        if verified["sha256"] != payload["sha256"] or len(remote_days) != len(days):
+            raise NasaDataError("Google Drive archive checksum verification failed")
+        return {
+            **verified,
+            "daily_records": len(remote_days),
+            "retrieval_mode": "google_drive_published",
+            "drive_readback_verified": True,
+        }
     _, verified = read_year(region_id, year)
     if verified["sha256"] != payload["sha256"]:
         raise NasaDataError("Archive write verification failed")
-    return verified
+    return {
+        **verified,
+        "daily_records": len(days),
+        "retrieval_mode": "local_archive",
+        "drive_readback_verified": False,
+    }
 
 
 def archived_weather(lat: float, lon: float, start: date, end: date) -> tuple[WeatherDay, ...] | None:
