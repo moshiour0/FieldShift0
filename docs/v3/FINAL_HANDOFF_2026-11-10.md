@@ -4,9 +4,23 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR:** [#1 — Draft / Open / Unmerged](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Preview:** https://field-shift0-fi04bj7bw.vercel.app  
+**Latest exact-head Preview:** https://field-shift0-4xuq3ds53.vercel.app  
 **Supabase:** FieldShift0 project, ref `bipyrlegaxmhwzwrmcmi`  
 **Production:** not promoted by this handoff.
+
+## Latest verification snapshot — 2026-11-10 15:30 UTC
+
+- Current PR head: `0d3546d091e9c7e4e4d3da003577655709f52e84`.
+- Exact-head GitHub Actions PR run #555 (`42844515648`) succeeded on Python 3.11 and 3.12: **177 passed, 1 non-blocking warning** in each job; `compileall`, strict Ruff and mypy also passed.
+- The two earlier checks on parent commit `5c3040cf2de75d1d4f59c3ee2d1cb01b5e94c5b4` failed because the health endpoint's engine version had changed without updating the preserved API contract. Commit `0d3546d` restores `engine=3.0.0` while retaining `product=3.3.0`; run #555 verifies the fix.
+- Exact-head Vercel Preview is READY: `https://field-shift0-4xuq3ds53.vercel.app`, deployment `dpl_AjG39xBNaj4LpuojpZjG87rucf3F`, source SHA equals the PR head above.
+- Exact-head GET smoke checks: `/` HTTP 200, `/health` HTTP 200 (`engine=3.0.0`, `product=3.3.0`), `/api/status` HTTP 200, and `/api/auth/config` HTTP 200 with `configured=true`, provider `email_magic_link`. The 12 planning groups and 9 reference points are returned by `/api/regions`.
+- Full-year `/api/history/{region}` checks for 2025 succeeded for all nine reference coordinates: daily archive representation, 365/365 records, coverage 1.0, no missing years, and an embedded SHA-256 for every region. The code path reads exact annual Google Drive objects when configured; the pipeline's archive-first helper requires an exact coordinate, complete dates and a verified checksum. The unit tests also assert that an off-anchor coordinate never borrows a nearby reference point.
+- The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` at all nine reference points. The full 2016–2025 daily archive is not complete: the bundled Mymensingh 2016–2025 monthly data remain chart-only, and daily full-year proof presently covers 2025 only.
+- Supabase `FieldShift0` is `ACTIVE_HEALTHY`, with 23 recorded migrations. The single `fieldshift-analysis-worker` cron is active at `*/5 * * * *`; its latest observed tick succeeded at 15:30 UTC. The run/source/result/event/job/cache/profile tables contain zero rows, so no real authenticated user run or revision lifecycle is proven.
+- Preview runtime error aggregation returned no errors in the checked one-hour window.
+- The Preview environment's `FIELD_SHIFT_WORKER_SECRET` is now stored as a non-readable Sensitive/Secret variable; its value was not read or changed. Google Drive, AppEEARS, GEE and Supabase configuration entries are present, but a configuration flag alone is not provider validation.
+- No PR merge, Production promotion, alias change, billing/plan change, Production environment edit, or ownership transfer was performed.
 
 ## What is delivered in the codebase
 
@@ -38,17 +52,18 @@ The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` for al
 ### Supabase persistence and worker
 
 - The FieldShift Supabase project is `ACTIVE_HEALTHY`; 23 migrations are recorded.
-- The scheduled job `fieldshift-analysis-worker` is active at `*/5 * * * *`.
-- The latest observed cron tick succeeded. Its safe command metadata confirms that it targets the protected worker route and supplies the worker header.
-- Analysis/run/source/result/event/job/cache tables currently contain zero records. Therefore the scheduler is proven to tick while idle; no real user run or result-revision lifecycle is yet proven.
+- The scheduled job `fieldshift-analysis-worker` is active at `*/5 * * * *` and the latest observed run succeeded at 15:30 UTC.
+- Its safe command metadata confirms that it targets the protected worker route and supplies the worker header.
+- Analysis/run/source/result/event/job/cache/profile tables currently contain zero records. Therefore the scheduler is proven to tick while idle; no real user run or result-revision lifecycle is yet proven.
 - RLS is enabled for the account, result, event, source and private worker/cache tables. The worker role relies on the high-entropy header token and active-lease checks, not a service-role key.
 
 ### GitHub, CI and Vercel Preview
 
-- Previous exact-head PR CI run #551 (commit `e1b58614b6a371b27c395b36e1ef8c130eba2132`) succeeded on Python 3.11 and 3.12, including pytest, compileall, Ruff and mypy.
-- Exact-head Vercel Preview was READY. `/`, `/health`, `/api/status`, `/api/auth/config`, `/api/regions`, `/api/history/{region}` and `/api/data-status/{region}` passed the checked GET requests.
-- Preview runtime error aggregation returned no errors in the checked 24-hour window.
-- Configuration metadata says AppEEARS, GEE, Drive and Supabase credentials are present for Preview; this is not credential validation or a successful NASA/GEE/Drive connection test by itself.
+- Current exact-head PR CI run #555 (`42844515648`) succeeded on Python 3.11 and 3.12: 177 tests passed in each job, plus compileall, Ruff and mypy.
+- Exact-head READY Preview: `https://field-shift0-4xuq3ds53.vercel.app` (`dpl_AjG39xBNaj4LpuojpZjG87rucf3F`, SHA `0d3546d091e9c7e4e4d3da003577655709f52e84`). Checked GET routes: `/`, `/health`, `/api/status`, `/api/auth/config`, `/api/regions`, and the 2025 full-year history endpoint for all nine reference coordinates.
+- Preview runtime error aggregation returned no errors in the checked one-hour window.
+- The data-history GET checks prove that the nine 2025 annual objects are readable through the configured archive path. They do not prove a Drive write/read-back roundtrip, which remains a separate gate for the SMAP preflight.
+- Preview metadata shows Drive, AppEEARS, GEE and Supabase settings are configured. AppEEARS/GEE credentials are not provider-validated merely because they are configured. No actual 2025 SMAP backfill is claimed.
 - No Production deployment, alias change, billing/plan change or PR merge was performed.
 
 ## Remaining acceptance gates
@@ -57,7 +72,7 @@ The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` for al
 2. Run one real authenticated Preview analysis from a human-controlled test account. Verify queue creation, a worker result revision, source states, My Runs listing, sign-out/sign-in restoration, and reopening after at least one day.
 3. Test two separate user accounts and prove cross-account reads/rechecks are rejected by RLS.
 4. Validate real AppEEARS task resume and the second-attempt SMAP path. A configured credential flag is not a provider test.
-5. Verify the exact NASA POWER archive is actually reused by the processing engine for a reference coordinate/date window; verify an off-anchor coordinate continues to use its own exact point request and never substitutes a reference location.
+5. The archive-first POWER baseline is now wired into the processing engine and covered by tests that require a verified exact-coordinate archive hit and prevent off-anchor reference-point substitution. Still perform a real authenticated Preview analysis to demonstrate this route end-to-end for a user request.
 6. Complete Bangladesh agronomic calibration with local crop calendars, field-measured soils, yield/price evidence and independent agronomist review. The current crop/soil scoring pack remains a Mymensingh pilot.
 7. Review the outstanding Supabase advisor warnings: the owner-scoped `SECURITY DEFINER` manual recheck RPC is intentional (it checks `auth.uid()`, locks the caller's run, and is not executable by anon); the private worker RLS performance warning should be rechecked after policy changes and not “fixed” by weakening token checks.
 8. Before Production release, separately review the exact PR head, final CI, authenticated user acceptance evidence, Supabase Production migration state, Production-only environment configuration, auth redirect allowlist, worker schedule/secret, and Vercel Production build. Obtain explicit release approval before merging or promoting.
