@@ -16,9 +16,6 @@ from fieldshift.api.product import (
     create_analysis,
     create_demo,
     get_analysis,
-    get_evidence,
-    get_strategy,
-    report,
     report_from_response,
     what_if,
 )
@@ -457,10 +454,15 @@ def analysis_run(request: Request, payload: dict[str, Any] | None = None) -> dic
 
 @app.get("/api/analysis/{run_id}")
 def analysis_get(run_id: str) -> dict[str, Any]:
+    if run_id != "demo_mymensingh_v3":
+        raise HTTPException(
+            status_code=404,
+            detail="Live analyses are available through your signed-in My Runs account.",
+        )
     try:
         return get_analysis(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown analysis: {run_id}") from exc
+        raise HTTPException(status_code=404, detail="Demo analysis is unavailable.") from exc
 
 
 @app.get("/api/analysis/{run_id}/strategies")
@@ -471,10 +473,11 @@ def analysis_strategies(run_id: str) -> dict[str, Any]:
 
 @app.get("/api/analysis/{run_id}/strategies/{strategy_id}")
 def analysis_strategy(run_id: str, strategy_id: str) -> dict[str, Any]:
-    try:
-        return get_strategy(run_id, strategy_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown strategy") from exc
+    data = analysis_get(run_id)
+    for strategy in data["strategies"]:
+        if strategy.get("id") == strategy_id:
+            return strategy
+    raise HTTPException(status_code=404, detail="Unknown strategy")
 
 
 @app.get("/api/analysis/{run_id}/scenarios")
@@ -485,22 +488,20 @@ def analysis_scenarios(run_id: str) -> dict[str, Any]:
 
 @app.get("/api/analysis/{run_id}/evidence/{evidence_id}")
 def analysis_evidence(run_id: str, evidence_id: str) -> dict[str, Any]:
-    try:
-        return get_evidence(run_id, evidence_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown evidence item") from exc
+    data = analysis_get(run_id)
+    for item in data.get("evidence", {}).get("items", []):
+        if item.get("id") == evidence_id:
+            return item
+    raise HTTPException(status_code=404, detail="Unknown evidence item")
 
 
 @app.post("/api/analysis/{run_id}/what-if")
 def analysis_what_if(run_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     try:
-        token = supabase_auth.bearer_token(request.headers.get("authorization"))
-        if token:
-            try:
-                supabase_auth.get_user(token)
-            except supabase_auth.SupabaseAPIError as exc:
-                status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
-                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        # The static public demo can be explored anonymously. Every live what-if
+        # requires a real session; the product layer uses only this caller's
+        # submitted field snapshot and never reads another live run from memory.
+        token, _ = _auth_context(request, required=run_id != "demo_mymensingh_v3")
         response = what_if(run_id, payload)
         if token:
             _persist_authenticated_response(request, payload, response)
@@ -517,10 +518,7 @@ def analysis_what_if(run_id: str, payload: dict[str, Any], request: Request) -> 
 
 @app.get("/api/analysis/{run_id}/report")
 def analysis_report(run_id: str) -> dict[str, Any]:
-    try:
-        return report(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown analysis") from exc
+    return report_from_response(analysis_get(run_id))
 
 
 @app.post("/api/analysis/{run_id}/report")

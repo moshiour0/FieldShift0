@@ -412,12 +412,11 @@ def create_demo() -> dict[str, Any]:
 
 def create_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     raw = _run_engine(payload)
-    # Keep the exact farmer-provided context with the in-process result so GET
-    # routes and what-if reruns do not silently replace it with pilot defaults.
-    raw["_product_field"] = json.loads(json.dumps(payload.get("field") or {}))
-    with _LOCK:
-        _RUNS[raw["run_id"]] = raw
-    return _make_product_response(raw, raw["_product_field"], demo=False, mode="live")
+    # Live farmer inputs/results are returned to the caller and, for signed-in
+    # durable runs, saved in Supabase by the API layer. Do not retain them in a
+    # process-global dictionary where a public run-ID route could expose them.
+    field_snapshot = json.loads(json.dumps(payload.get("field") or {}))
+    return _make_product_response(raw, field_snapshot, demo=False, mode="live")
 
 
 def get_analysis(run_id: str) -> dict[str, Any]:
@@ -453,12 +452,10 @@ def get_evidence(run_id: str, evidence_id: str) -> dict[str, Any]:
 
 
 def what_if(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        base = get_analysis(run_id)
-    except KeyError:
-        # Serverless requests can land on different instances, so accept the
-        # client-held field snapshot as the fallback source for what-if runs.
-        base = None
+    # Only the static demo may be reloaded from the public in-process snapshot.
+    # Live runs must use the caller's own submitted context, never another
+    # user's process-local run ID or cached farmer field.
+    base = get_analysis(run_id) if run_id == "demo_mymensingh_v3" else None
     base_field = (base or {}).get("field") or payload.get("field")
     if not isinstance(base_field, dict) or not isinstance(base_field.get("location"), dict):
         raise KeyError(run_id)

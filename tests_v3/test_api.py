@@ -8,6 +8,7 @@ os.environ.setdefault("FIELD_SHIFT_LIVE_NASA", "0")
 from fastapi.testclient import TestClient
 
 from fieldshift.api.app import app
+from fieldshift.api import product
 
 
 class TestAPI(unittest.TestCase):
@@ -132,6 +133,97 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(queue_call.call_args.kwargs["access_token"], "valid-user-token")
         self.assertEqual(queue_call.call_args.kwargs["client_request_id"], client_request_id)
         self.assertNotIn("client_request_id", queue_call.call_args.kwargs["request_payload"])
+
+    def test_live_analysis_read_routes_never_expose_process_local_run_ids(self):
+        c = TestClient(app)
+        paths = [
+            "/api/analysis/run_private_123",
+            "/api/analysis/run_private_123/strategies",
+            "/api/analysis/run_private_123/strategies/strategy_1",
+            "/api/analysis/run_private_123/scenarios",
+            "/api/analysis/run_private_123/evidence/evidence_1",
+            "/api/analysis/run_private_123/report",
+        ]
+        with patch("fieldshift.api.app.get_analysis") as get_live_analysis:
+            for path in paths:
+                response = c.get(path)
+                self.assertEqual(response.status_code, 404, path)
+            get_live_analysis.assert_not_called()
+
+    def test_live_what_if_requires_a_verified_account_session(self):
+        c = TestClient(app)
+        with patch("fieldshift.api.app.what_if") as what_if_call:
+            response = c.post(
+                "/api/analysis/run_private_123/what-if",
+                json={"scenario": "dry", "field": {"id": "field_1"}},
+            )
+        self.assertEqual(response.status_code, 401)
+        what_if_call.assert_not_called()
+
+    def test_public_demo_analysis_read_remains_available(self):
+        c = TestClient(app)
+        demo = {
+            "run": {"id": "demo_mymensingh_v3"},
+            "strategies": [{"id": "strategy_1"}],
+            "scenarios": [],
+            "evidence": {"items": []},
+        }
+        with patch("fieldshift.api.app.get_analysis", return_value=demo) as get_demo:
+            response = c.get("/api/analysis/demo_mymensingh_v3")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), demo)
+        get_demo.assert_called_once_with("demo_mymensingh_v3")
+
+    def test_live_analysis_is_not_retained_in_the_process_global_run_cache(self):
+        raw = {"run_id": "run_private_123"}
+        with patch.dict(product._RUNS, {}, clear=True), patch(
+            "fieldshift.api.product._run_engine", return_value=raw
+        ), patch(
+            "fieldshift.api.product._make_product_response", return_value={"ok": True}
+        ) as make_response:
+            result = product.create_analysis({"field": {"lat": 24.75, "lon": 90.41}})
+            self.assertEqual(result, {"ok": True})
+            self.assertNotIn("run_private_123", product._RUNS)
+            self.assertNotIn("_product_field", raw)
+            self.assertEqual(make_response.call_args.args[1], {"lat": 24.75, "lon": 90.41})
+
+    def test_live_what_if_uses_the_callers_field_snapshot_not_another_run_cache(self):
+        field = {
+            "id": "caller_field",
+            "location": {"lat": 24.75, "lon": 90.41},
+            "area_ha": 0.4,
+            "land_type": "medium highland",
+            "previous_crop": "Rice",
+            "soil_inputs": {"pH": 6.2},
+            "soil_data_source": "farmer-reported",
+            "constraints": {
+                "water_available_mm_season": 900,
+                "irrigation_reliability": 0.8,
+                "budget_bdt_ha": 100000,
+                "labour_available_person_days_ha": 120,
+            },
+        }
+        payload = {
+            "scenario": "dry",
+            "field": field,
+            "priorities": {"water": 1.0},
+            "evidence_window": {"start_date": "2025-01-01", "end_date": "2025-01-31"},
+        }
+        with patch(
+            "fieldshift.api.product.get_analysis",
+            side_effect=AssertionError("must not load another live run"),
+        ), patch(
+            "fieldshift.api.product.create_analysis", return_value={"ok": True}
+        ) as create_call:
+            result = product.what_if("run_other_user_123", payload)
+        self.assertEqual(result, {"ok": True})
+        created = create_call.call_args.args[0]
+        self.assertEqual(created["field"]["field_id"], "caller_field")
+        self.assertEqual(created["field"]["lat"], 24.75)
+        self.assertEqual(created["field"]["soil"], {"pH": 6.2})
+        self.assertEqual(created["field"]["farmer"]["water_available_mm_season"], 720.0)
+        self.assertEqual(created["start_date"], "2025-01-01")
+        self.assertEqual(created["end_date"], "2025-01-31")
 
     def test_auth_config_is_safe_when_not_configured(self):
         c = TestClient(app)
