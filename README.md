@@ -4,6 +4,8 @@
 
 > **Current owner handoff (10 November 2026):** See the [Final Handoff](docs/v3/FINAL_HANDOFF_2026-11-10.md) for exact branch/CI/Preview evidence, dataset coverage, operator steps and outstanding acceptance gates. The feature branch is still Draft; Production has not been promoted.
 
+> **Access boundary:** Public `/api/analysis/{run_id}` read routes return only the static `demo_mymensingh_v3` snapshot. Live user runs are retrieved only through the bearer-authenticated, owner-scoped `/api/account/runs` endpoints. Live analyses are not retained in a process-global cache. The compatibility what-if route uses the caller's submitted field snapshot and does not load a different live run by ID.
+
 FieldShift V3 is the upgraded decision-support engine for NASA Space Apps 2026 “Field Shift: Adapting Farms with NASA Data”. V2 is retained for compatibility; the production path is now `fieldshift.v3`.
 
 ## V3 objective
