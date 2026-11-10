@@ -4,16 +4,16 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR:** [#1 — Draft / Open / Unmerged](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Latest exact-head Preview:** https://field-shift0-hbmuwnxdu.vercel.app  
+**Latest exact-head Preview:** https://field-shift0-fce6othm3.vercel.app  
 **Runtime-code Preview:** https://field-shift0-nttj3iysm.vercel.app  
 **Supabase:** FieldShift0 project, ref `bipyrlegaxmhwzwrmcmi`  
 **Production:** not promoted by this handoff.
 
-## Latest verification snapshot — 2026-11-10 15:40 UTC
+## Latest verification snapshot — 2026-11-10 15:48 UTC
 
-- Current PR head: `f4417bf5107d001fac848d549e709b620eda66c5`. Its latest commit updates handoff documentation; runtime code is at `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
-- Exact-head GitHub Actions PR run #562 (`42846659223`) succeeded on Python 3.11 and 3.12: **178 passed, 1 non-blocking warning** in each job. `compileall`, strict Ruff and mypy (34 source files) passed in both jobs.
-- Exact-head Vercel Preview is READY: `https://field-shift0-hbmuwnxdu.vercel.app`, deployment `dpl_U5ppyfczeMtA7PKdDch7WNbuPvRo`, source SHA equals the current PR head. The latest runtime-code Preview is READY at `https://field-shift0-nttj3iysm.vercel.app`, deployment `dpl_5La2bQJp5nusHheaJTAUgW99ns27`, source SHA `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
+- Branch snapshot used for this handoff: `b3ac2386e8df734df068e8533682019108ee4d81` (README and engineering handoff alignment); runtime code is at `f2baa301dc30fbe6dc71d7076a41a30336b57b76`. The PR link is the live source of truth for any later documentation-only tip.
+- Exact-head GitHub Actions run #563 (`42848036228`) succeeded on Python 3.11 and 3.12: **178 passed, 1 non-blocking warning** in each job. `compileall`, strict Ruff and mypy (34 source files) passed in both jobs.
+- Exact-head Vercel Preview is READY: `https://field-shift0-fce6othm3.vercel.app`, deployment `dpl_2SorTvVTcPQ7BsLGLa8zXZ6ucZiH`, source SHA equals branch snapshot `b3ac2386e8df734df068e8533682019108ee4d81`. The runtime-code Preview is READY at `https://field-shift0-nttj3iysm.vercel.app`, deployment `dpl_5La2bQJp5nusHheaJTAUgW99ns27`, source SHA `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
 - Exact-head GET checks: `/` HTTP 200, `/health` HTTP 200 (`engine=3.0.0`, `product=3.3.0`), `/api/status` HTTP 200, `/api/auth/config` HTTP 200 with `configured=true` and `email_magic_link`, `/api/regions` returned 12 planning groups and 9 reference points, and `/school-game/` served the Bengali Learning Lab.
 - Full-year `/api/history/{region}` checks on the exact-head Preview for 2025 succeeded for all nine reference coordinates: daily representation, 365/365 records, `coverage_fraction=1.0`, no missing years and SHA-256 provenance. These are gridded reference-point samples—not farm sensors, district averages, official AEZ means or arbitrary-coordinate data.
 - All nine `/api/data-status/{region}` results report NASA POWER `ready` through 2025-12-31. The same nine points report SMAP, HLS, MODIS MOD16 and GPM as `not_archived`. The Mymensingh 2016–2025 monthly history remains chart-only; a complete 2016–2025 daily archive is not claimed.
