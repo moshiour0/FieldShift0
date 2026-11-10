@@ -18,6 +18,26 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["engine"], "3.0.0")
 
+    def test_worker_status_uses_the_same_token_aliases_as_worker_execution(self):
+        c = TestClient(app)
+        base_env = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            "SUPABASE_ANON_KEY": "anon_test",
+            "FIELDSHIFT_WORKER_TOKEN": "",
+            "FIELD_SHIFT_WORKER_SECRET": "x" * 48,
+        }
+        with patch.dict(os.environ, base_env, clear=False):
+            response = c.get("/api/status")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["analysis_state"]["active_execution_durable_across_instances"])
+
+        base_env["FIELD_SHIFT_WORKER_SECRET"] = "too-short"
+        with patch.dict(os.environ, base_env, clear=False):
+            response = c.get("/api/status")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["analysis_state"]["active_execution_durable_across_instances"])
+
     def test_account_runs_requires_a_supabase_session(self):
         c = TestClient(app)
         response = c.get("/api/account/runs")

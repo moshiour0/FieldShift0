@@ -25,15 +25,19 @@ class WorkerAPIError(RuntimeError):
         self.status_code = status_code
 
 
+def configured_worker_token() -> str:
+    """Resolve the same server-only token aliases used by the tick route."""
+    return (
+        os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
+        or os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip()
+    )
+
+
 def _settings(worker_token_override: str | None = None) -> tuple[str, str, str, str]:
     base_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
     anon_jwt = os.getenv("SUPABASE_ANON_KEY", "").strip()
-    worker_token = (
-        worker_token_override
-        or os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
-        or os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip()
-    )
+    worker_token = worker_token_override or configured_worker_token()
     if not base_url or not publishable_key or not anon_jwt or len(worker_token) < 48:
         raise WorkerAPIError("The scheduled analysis worker is not configured.")
     return base_url, publishable_key, anon_jwt, worker_token
