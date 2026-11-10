@@ -888,7 +888,6 @@ def test_power_baseline_keeps_unarchived_field_on_its_own_live_coordinate(monkey
 
     def archive_lookup(lat, lon, start, end):
         archive_calls.append((lat, lon, start, end))
-        return None
 
     def live_lookup(lat, lon, start, end, **kwargs):
         live_calls.append((lat, lon, start, end))
