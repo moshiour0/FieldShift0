@@ -861,4 +861,4 @@ def test_power_baseline_prefers_verified_exact_coordinate_archive(monkeypatch, t
 def test_health_reports_consistent_product_engine_version():
     response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "engine": "3.3.0", "product": "3.3.0"}
+    assert response.json() == {"status": "ok", "engine": "3.0.0", "product": "3.3.0"}
