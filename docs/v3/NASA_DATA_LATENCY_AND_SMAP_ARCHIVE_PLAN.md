@@ -10,6 +10,12 @@
 
 ---
 
+## 0. Latest POWER archive and Preview evidence — 2026-11-10
+
+The exact-head Preview was checked for each configured reference point over 2025-01-01 through 2025-12-31. All nine returned daily representation, 365 available days out of 365 expected, full coverage, no missing years, and an embedded SHA-256 archive checksum. These data are NASA POWER gridded reference-point histories, not field measurements or spatially complete Bangladesh coverage. The archive-first pipeline change now uses a complete annual archive only on an exact coordinate/date match; all other requests retain the live POWER path.
+
+The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` at all nine reference points. The 2025 SMAP reference-point pilot has not yet been dispatched. No arbitrary-location national SMAP grid archive exists.
+
 ## 0. Read this first in a future chat
 
 This file is the authoritative implementation handoff for the data-latency and saved-analysis scope. A future session must:

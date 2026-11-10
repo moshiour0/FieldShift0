@@ -28,6 +28,7 @@ from .gee import (
     nex_models,
     smap_daily_point_timeseries,
 )
+from .history import archived_weather_details
 from .indicators import compute_rotation_indicators
 from .models import (
     CropV2,
@@ -443,6 +444,56 @@ def _merge_remote(rows) -> tuple:
     return tuple(sorted(by.values(), key=lambda x: x.d))
 
 
+def _load_power_baseline(
+    field: FieldV2,
+    start: dt.date,
+    end: dt.date,
+    cache_dir: Path,
+) -> tuple[tuple[WeatherDay, ...], dict[str, Any]]:
+    """Prefer a checksum-validated exact-point archive before making a live POWER request."""
+    archived = archived_weather_details(field.lat, field.lon, start, end)
+    if archived is not None:
+        days, archive_years, retrieval_mode = archived
+        record = dataset_record(
+            "NASA POWER Daily weather",
+            days[0].provenance,
+            f"{len(days)} daily records, {days[0].d.isoformat()} to {days[-1].d.isoformat()}; exact-point annual archive",
+        )
+        record.update({
+            "data_start_date": days[0].d.isoformat(),
+            "data_end_date": days[-1].d.isoformat(),
+            "retrieval_mode": retrieval_mode,
+            "quality_status": "checksum_verified",
+            "quality_note": (
+                "The exact representative-point archive passed annual identity, embedded SHA-256, "
+                "daily continuity and physical-bound checks at read time."
+            ),
+            "archive_years": list(archive_years),
+            "archive_sha256s": [item["sha256"] for item in archive_years],
+            "coverage_fraction": 1.0,
+        })
+        return days, record
+
+    baseline = power_daily(field.lat, field.lon, start, end, timeout=20, retries=2, cache_dir=cache_dir)
+    source = baseline[0].source
+    record = dataset_record(
+        "NASA POWER Daily weather",
+        baseline[0].provenance,
+        f"{len(baseline)} daily records, {baseline[0].d.isoformat()} to {baseline[-1].d.isoformat()}; {source}",
+    )
+    record["data_start_date"] = baseline[0].d.isoformat()
+    record["data_end_date"] = baseline[-1].d.isoformat()
+    record["retrieval_mode"] = (
+        "stale-cache" if "(stale-cache;" in source else
+        "cache" if "(cache" in source else
+        "live" if "(live" in source else "unknown"
+    )
+    if record["retrieval_mode"] == "stale-cache":
+        record["status"] = "stale"
+        record["fallback"] = "NASA was temporarily unavailable; a clearly marked cached NASA record was used"
+    return baseline, record
+
+
 def load_scenarios(
     field: FieldV2,
     year: int,
@@ -472,23 +523,7 @@ def load_scenarios(
         if request_start <= request_end:
             try:
                 cache_dir = Path(os.getenv("FIELD_SHIFT_CACHE_DIR", str(input_dir / "cache")))
-                baseline = power_daily(field.lat, field.lon, request_start, request_end, timeout=20, retries=2, cache_dir=cache_dir)
-                source = baseline[0].source
-                record = dataset_record(
-                    "NASA POWER Daily weather",
-                    baseline[0].provenance,
-                    f"{len(baseline)} daily records, {baseline[0].d.isoformat()} to {baseline[-1].d.isoformat()}; {source}",
-                )
-                record["data_start_date"] = baseline[0].d.isoformat()
-                record["data_end_date"] = baseline[-1].d.isoformat()
-                record["retrieval_mode"] = (
-                    "stale-cache" if "(stale-cache;" in source else
-                    "cache" if "(cache" in source else
-                    "live" if "(live" in source else "unknown"
-                )
-                if record["retrieval_mode"] == "stale-cache":
-                    record["status"] = "stale"
-                    record["fallback"] = "NASA was temporarily unavailable; a clearly marked cached NASA record was used"
+                baseline, record = _load_power_baseline(field, request_start, request_end, cache_dir)
                 datasets.append(record)
             except Exception as exc:
                 datasets.append({

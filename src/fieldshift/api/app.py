@@ -245,7 +245,7 @@ def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "engine": "3.0.0", "product": "3.3.0"}
+    return {"status": "ok", "engine": "3.3.0", "product": "3.3.0"}
 
 
 @app.get("/api/status")

@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from dataclasses import asdict
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from fieldshift.api.app import app
-from fieldshift.v3 import appeears, gee, pipeline
+from fieldshift.v3 import appeears, gee, history, pipeline
 from fieldshift.v3.dates import evidence_dates
 from fieldshift.v3.diagnostics import safe_error
-from fieldshift.v3.models import RemoteDay
+from fieldshift.v3.models import Provenance, RemoteDay, WeatherDay
 
 START, END = date(2025, 1, 1), date(2025, 1, 15)
 PRODUCTS = [
@@ -726,3 +727,138 @@ def test_nex_pending_can_resume_cached_months(monkeypatch, tmp_path):
     with patch.object(gee, "_fetch_normal_month", return_value=old) as fetch:
         completed = gee.nex_gddp_monthly_deltas(24.75, 90.41, "ssp245", tmp_path)
     assert completed.status == "live" and fetch.call_count == 23
+
+
+def test_archived_weather_details_validates_drive_payload_and_requires_exact_reference_point(monkeypatch, tmp_path):
+    region = history.region_by_id("mymensingh")
+    provenance = Provenance(
+        source="NASA POWER",
+        source_type="observed/model-derived",
+        retrieval_date="2026-11-09T06:43:22Z",
+        temporal_resolution="daily",
+        citation="https://power.larc.nasa.gov/docs/services/api/temporal/daily/",
+    )
+    rows = []
+    for offset in range(365):
+        day = date(2025, 1, 1) + timedelta(days=offset)
+        weather = WeatherDay(
+            d=day,
+            tmax_c=30.0,
+            tmin_c=22.0,
+            rh_mean_pct=70.0,
+            wind_2m_ms=1.0,
+            solar_rad_mj_m2_day=18.0,
+            rain_mm=0.5,
+            source="NASA POWER (live)",
+            provenance=provenance,
+        )
+        rows.append({**asdict(weather), "d": day.isoformat(), "provenance": asdict(provenance)})
+    payload = {
+        "schema_version": 1,
+        "region": region,
+        "year": 2025,
+        "archived_at": "2026-11-09T06:43:22Z",
+        "days": rows,
+        "sha256": history._digest(rows),
+        "source": "NASA POWER",
+        "citation": "https://power.larc.nasa.gov/docs/services/api/temporal/daily/",
+        "quality": "NASA POWER (live)",
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    calls = []
+    monkeypatch.setattr(history, "archive_dir", lambda: tmp_path)
+    monkeypatch.setattr(history.google_drive, "configured", lambda: True)
+    monkeypatch.setattr(history.google_drive, "get_object", lambda key: calls.append(key) or raw)
+
+    result = history.archived_weather_details(
+        24.75, 90.41, date(2025, 1, 1), date(2025, 1, 3),
+    )
+
+    assert result is not None
+    days, metadata, retrieval_mode = result
+    assert len(days) == 3
+    assert days[0].d == date(2025, 1, 1)
+    assert days[-1].d == date(2025, 1, 3)
+    assert "NASA POWER (archive)" in days[0].source
+    assert metadata[0]["sha256"] == payload["sha256"]
+    assert retrieval_mode == "google_drive_archive"
+    assert calls == ["power-history/mymensingh/2025.json"]
+
+    # A nearby anchor is never substituted for a farmer-selected coordinate.
+    assert history.archived_weather_details(
+        24.7501, 90.41, date(2025, 1, 1), date(2025, 1, 3),
+    ) is None
+    assert calls == ["power-history/mymensingh/2025.json"]
+
+
+def test_archived_weather_details_rejects_a_bad_embedded_checksum(monkeypatch, tmp_path):
+    region = history.region_by_id("mymensingh")
+    provenance = asdict(Provenance(source="NASA POWER", source_type="observed/model-derived"))
+    rows = []
+    for offset in range(365):
+        day = date(2025, 1, 1) + timedelta(days=offset)
+        rows.append({
+            "d": day.isoformat(),
+            "tmax_c": 30.0,
+            "tmin_c": 22.0,
+            "rh_mean_pct": 70.0,
+            "wind_2m_ms": 1.0,
+            "solar_rad_mj_m2_day": 18.0,
+            "rain_mm": 0.5,
+            "source": "NASA POWER (live)",
+            "provenance": provenance,
+        })
+    payload = {
+        "schema_version": 1,
+        "region": region,
+        "year": 2025,
+        "days": rows,
+        "sha256": "0" * 64,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    monkeypatch.setattr(history, "archive_dir", lambda: tmp_path)
+    monkeypatch.setattr(history.google_drive, "configured", lambda: True)
+    monkeypatch.setattr(history.google_drive, "get_object", lambda _key: raw)
+
+    assert history.archived_weather_details(
+        24.75, 90.41, date(2025, 1, 1), date(2025, 1, 3),
+    ) is None
+
+
+def test_power_baseline_prefers_verified_exact_coordinate_archive(monkeypatch, tmp_path):
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    rows = tuple(
+        WeatherDay(
+            d=date.fromordinal(START.toordinal() + offset),
+            tmax_c=30.0,
+            tmin_c=22.0,
+            rh_mean_pct=70.0,
+            wind_2m_ms=1.0,
+            solar_rad_mj_m2_day=18.0,
+            rain_mm=0.5,
+            source="NASA POWER (archive); original: NASA POWER (live)",
+            provenance=Provenance(source="NASA POWER", source_type="observed/model-derived"),
+        )
+        for offset in range((END - START).days + 1)
+    )
+    metadata = ({"year": 2025, "sha256": "a" * 64, "archived_at": "2026-11-09T06:43:22Z"},)
+    monkeypatch.setattr(
+        pipeline, "archived_weather_details",
+        lambda lat, lon, start, end: (rows, metadata, "google_drive_archive"),
+    )
+    monkeypatch.setattr(pipeline, "power_daily", lambda *args, **kwargs: pytest.fail("live POWER must not run on an archive hit"))
+
+    baseline, record = pipeline._load_power_baseline(field, START, END, tmp_path)
+
+    assert baseline == rows
+    assert record["retrieval_mode"] == "google_drive_archive"
+    assert record["quality_status"] == "checksum_verified"
+    assert record["archive_sha256s"] == ["a" * 64]
+    assert record["data_start_date"] == START.isoformat()
+    assert record["data_end_date"] == END.isoformat()
+
+
+def test_health_reports_consistent_product_engine_version():
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "engine": "3.3.0", "product": "3.3.0"}

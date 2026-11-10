@@ -7,6 +7,15 @@
 > **Pull request:** #1 — Draft / Open / Unmerged (do not merge without explicit approval)  
 > **Production rule:** Do not promote this feature branch to Production without explicit approval.
 
+## 0. Latest operational checkpoint — 2026-11-10
+
+- The live Preview exposes complete 2025 daily NASA POWER archive data for all nine configured representative reference points. Full-year checks returned `365/365`, `coverage_fraction=1.0`, `status=complete`, no missing years and SHA-256 provenance. The archives were timestamped 2026-11-09.
+- This is a nine-point exact-coordinate reference archive, not a field measurement, zone average, official AEZ average or national grid.
+- On the same Preview, SMAP, HLS, MODIS MOD16 and GPM still report `not_archived` for all nine reference points. The actual 2025 SMAP pilot remains outstanding.
+- Supabase is `ACTIVE_HEALTHY`; the five-minute worker cron is active and its most recent observed tick succeeded. Account/run/source/result/event/job/cache tables contain zero records, so no real authenticated analysis run has yet been proven.
+- The exact PR head `e1b58614b6a371b27c395b36e1ef8c130eba2132` passed PR CI run #551 (Python 3.11 and 3.12) and has a READY exact-head Preview. A new archive-first integration change is being added after this checkpoint; re-run CI and verify its new exact-head Preview before treating the code as deployed.
+- Do not merge PR #1 or promote Production without explicit release approval.
+
 ## 0. Read this first in a future chat
 
 > **Additional scope handoff:** Read [`NASA_DATA_LATENCY_AND_SMAP_ARCHIVE_PLAN.md`](./NASA_DATA_LATENCY_AND_SMAP_ARCHIVE_PLAN.md) for the user's AppEEARS 53-request latency evidence, SMAP-first archive decision, exact-location cache, preliminary-result policy, and phased implementation/acceptance gates. This file governs the latency/archive scope; the sections below retain the durable queue/auth/worker history.
@@ -72,8 +81,8 @@ Verified findings from code inspection:
 8. AppEEARS already reuses pending/recent provider tasks using stable task names, pending cache files, and the account task list. That is useful, but Vercel ephemeral files are not a durable source of truth. Provider task IDs and source state must be persisted in the database.
 9. NASA GPM IMERG can return partial date coverage. Its current cache path may store any non-empty subset and subsequently return that subset as a cache hit until TTL expiry. The missing dates must be tracked separately and re-queried/merged; a partial cache must not be treated as a full cache hit.
 10. NASA POWER supports live retrieval, expiring cache, stale-cache fallback, validation, and bounded gap filling. Its values are gridded point estimates, not field sensor measurements. Existing verified historical archive entries are exact representative-coordinate samples.
-11. history.py implements archived_weather() for exact representative coordinates, but pipeline.py's run_v3() weather path currently calls power_daily() directly. The prediction engine is not yet fully connected to the verified Google Drive completed-year archive.
-12. The current 2025 backfill is verified. The intended 2016–2025 archive is not yet verified complete.
+11. `history.py` exposes a strict archive reader for exact reference coordinates, and the current branch wires it into the POWER baseline as an archive-first lookup. Only a complete, checksummed annual object for the exact requested coordinate/date span can be reused; other locations or missing years continue through the live POWER path.
+12. The 2025 archive is complete for the nine reference points (365/365 per point). The 2016–2025 archive is not complete.
 
 ### 1.2 Current data-source behaviour
 
@@ -176,7 +185,7 @@ A cache key must include enough information to prevent scientific mismatches:
 
 Store SHA-256, archive object key, quality/provenance metadata, coverage start/end, and verification timestamp. Cache states should include candidate, verified, and quarantined. Only verified entries may be reused as trusted cached evidence.
 
-Never use a nearby representative coordinate as the user's field value. The existing nine-point 2016–2025 archive is directly reusable only for those exact representative coordinates, unless a scientifically validated grid-cell matching rule is introduced.
+Never use a nearby representative coordinate as the user's field value. The verified 2025 reference archive is reusable only for the exact nine coordinates and only for fully covered date windows. It must not be treated as arbitrary field coverage.
 
 ### 3.4 Retry design
 
@@ -538,7 +547,7 @@ Migration history confirmed on project `bipyrlegaxmhwzwrmcmi`:
 - Repeated checks with the same client request ID append a new immutable result revision when the evidence fingerprint or run status changes. Identical submissions are idempotent.
 - The current `POST /api/analysis/run` still performs the scientific computation synchronously before the persistence RPC is called. It is not yet a queued background execution.
 - The private `analysis_run_jobs` table is provisioned but no source-specific worker has been connected to it. Closing the browser during an upstream pending-data window does not yet guarantee autonomous provider polling; the existing frontend refresh path remains.
-- The verified Google Drive archive is not yet wired into the new run persistence/cache resolver.
+- The exact-coordinate completed-year POWER archive is now consulted before a live POWER request. The separate SMAP/HLS/MODIS/GPM archive resolver and real provider round-trip tests remain open.
 - Until the durable worker and archive recovery phase is complete, do not claim that pending provider tasks continue independently for days or that all delayed datasets are automatically fetched after a user closes the page.
 
 ### Next implementation phases
@@ -686,7 +695,7 @@ The current Draft PR head now closes that gap:
 - Python 3.11 and 3.12: **153 passed, 1 existing Starlette/httpx TestClient deprecation warning** each; Ruff, compileall and mypy pass (34 source files).
 - The current READY Vercel Preview is still the older deployment `dpl_EW33d9RLejMcU2iJneCZJJaQQEvy`, commit `5886df8bee798aada53de9a450a24952a294b504`. It contains pending-task ID exposure but predates the explicit DB → worker → pipeline task-ID reload code.
 - A deployment request for the current source commit was rejected by Vercel with HTTP 402 `api-deployments-free-per-day` and `retry-after: 86400`. The mapped Vercel CLI fallback is not installed in this execution environment. No alternate deployment mechanism was used to bypass the limit. No billing/plan setting was changed.
-- Consequently, the explicit task-ID reload code is CI-verified but **not yet deployed or live-smoke-tested**. Do not treat it as active in the current Preview until a READY deployment matches the current branch head and a worker retry proves the same stored AppEEARS task IDs are reused.
+- The explicit task-ID reload code is deployed on the current READY Preview and CI-verified. Its actual reuse across a real AppEEARS worker retry remains unproven until a real provider task is submitted, persisted, and resumed on a later attempt.
 - The one canonical five-minute Supabase schedule remains active and the old Preview worker responds to the idle endpoint. The temporary queue is gone, so it has no test job to process.
 - PR #1 remains Draft/Open/Unmerged. Production, Production env vars, and the unrelated SARGuardian-Monorepo project remain unchanged.
 

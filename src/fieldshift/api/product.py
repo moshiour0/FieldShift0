@@ -237,6 +237,8 @@ def _evidence_state(lineage: list[dict[str, Any]], remote_coverage: float) -> di
             "temporal_resolution": record.get("temporal_resolution"),
             "spatial_resolution": record.get("spatial_resolution"),
             "citation": record.get("citation"),
+            "archive_years": record.get("archive_years"),
+            "archive_sha256s": record.get("archive_sha256s"),
         })
     usable = [i for i in items if i["status"] in {"available", "partial", "stale"}]
     satellite_sources = sum(1 for i in usable if i["source_type"] == "satellite")

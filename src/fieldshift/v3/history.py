@@ -125,7 +125,8 @@ def _decode_year_payload(
     return days, {k: v for k, v in payload.items() if k != "days"}
 
 
-def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
+def read_year_with_mode(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict, str]:
+    """Read one fully validated annual archive and identify the storage path."""
     path = _path(region_id, year)
     if google_drive.configured():
         try:
@@ -133,10 +134,17 @@ def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
         except google_drive.GoogleDriveError as exc:
             raise RuntimeError("Google Drive history archive unavailable") from exc
         if archived is not None:
-            return _decode_year_payload(region_id, year, archived)
+            days, metadata = _decode_year_payload(region_id, year, archived)
+            return days, metadata, "google_drive_archive"
     if path.exists():
-        return _decode_year_payload(region_id, year, path.read_bytes())
+        days, metadata = _decode_year_payload(region_id, year, path.read_bytes())
+        return days, metadata, "local_archive"
     raise FileNotFoundError(str(path))
+
+
+def read_year(region_id: str, year: int) -> tuple[tuple[WeatherDay, ...], dict]:
+    days, metadata, _ = read_year_with_mode(region_id, year)
+    return days, metadata
 
 
 def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
@@ -245,23 +253,61 @@ def prefetch_year(region_id: str, year: int, *, refresh: bool = False) -> dict:
     }
 
 
-def archived_weather(lat: float, lon: float, start: date, end: date) -> tuple[WeatherDay, ...] | None:
-    """Reuse only exact representative coordinates and a fully covered date span."""
+def archived_weather_details(
+    lat: float, lon: float, start: date, end: date,
+) -> tuple[tuple[WeatherDay, ...], tuple[dict[str, Any], ...], str] | None:
+    """Return verified archive rows only for an exact reference coordinate and full date coverage.
+
+    Each annual object must pass its identity, embedded SHA-256, physical-bound and
+    daily-continuity checks. A missing/corrupt year makes this helper return None;
+    callers must then use their normal live-source path rather than fill the gap.
+    """
+    if end < start:
+        return None
     region = next((r for r in REGIONS if abs(r["lat"] - lat) < 0.000001 and abs(r["lon"] - lon) < 0.000001), None)
     if region is None:
         return None
+
     out: list[WeatherDay] = []
+    metadata: list[dict[str, Any]] = []
+    storage_modes: set[str] = set()
     try:
         for year in range(start.year, end.year + 1):
-            days, _ = read_year(region["id"], year)
-            out.extend(WeatherDay(**{**asdict(d), "d": d.d, "provenance": d.provenance,
-                                     "source": f"NASA POWER (archive); original: {d.source}"})
-                       for d in days if start <= d.d <= end)
-    except (OSError, ValueError, KeyError, TypeError):
+            days, year_meta, storage_mode = read_year_with_mode(region["id"], year)
+            storage_modes.add(storage_mode)
+            metadata.append({
+                "year": year,
+                "sha256": year_meta["sha256"],
+                "archived_at": year_meta.get("archived_at"),
+            })
+            out.extend(
+                WeatherDay(
+                    **{
+                        **asdict(day),
+                        "d": day.d,
+                        "provenance": day.provenance,
+                        "source": f"NASA POWER (archive); original: {day.source}",
+                    }
+                )
+                for day in days if start <= day.d <= end
+            )
+        result = tuple(out)
+        validate_days(result, start, end)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError):
         return None
-    result = tuple(out)
-    validate_days(result, start, end)
-    return result
+
+    retrieval_mode = (
+        "google_drive_archive" if storage_modes == {"google_drive_archive"}
+        else "local_archive" if storage_modes == {"local_archive"}
+        else "mixed_archive"
+    )
+    return result, tuple(metadata), retrieval_mode
+
+
+def archived_weather(lat: float, lon: float, start: date, end: date) -> tuple[WeatherDay, ...] | None:
+    """Compatibility wrapper for exact-coordinate, fully covered annual archive rows."""
+    details = archived_weather_details(lat, lon, start, end)
+    return details[0] if details is not None else None
 
 
 def history_summary(region_id: str, start_year: int = 2016, end_year: int = 2025) -> dict:
