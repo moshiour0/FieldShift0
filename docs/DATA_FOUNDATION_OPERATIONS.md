@@ -2,6 +2,16 @@
 
 This runbook describes the reproducible NASA POWER daily point archive for the nine configured Bangladesh reference points. It does not claim official AEZ zonal coverage, farm-level measurements, or satellite-product coverage.
 
+## Current verified state — 10 November 2026
+
+- The exact-head Preview returned complete NASA POWER daily history for **all nine reference points** over 2025-01-01 through 2025-12-31: 365/365 days, coverage 1.0, no missing dates and SHA-256 provenance.
+- The daily annual files are read through the configured private Google Drive path. The repository only bundles the older Mymensingh monthly summaries, so these API daily reads demonstrate that the remote object read path is working. This does not prove a new upload/write-back; the separate SMAP preflight performs its own temporary Drive write/read/delete test.
+- Years 2016–2024 are not yet verified as daily archives. The bundled Mymensingh 2016–2025 monthly aggregates remain chart-only.
+- The manual POWER workflow file `.github/workflows/history-backfill.yml` already exists on `main`, so it can be dispatched and run against the feature branch.
+- The weekly refresh workflow and SMAP workflow currently exist only on the feature branch, not `main`. Scheduled events and `workflow_dispatch` only run after the corresponding workflow file is present on the default branch. PR #2 registers the SMAP workflow as a separate one-file Draft PR; do not merge it without reviewing the possible Vercel Production redeploy.
+- PR #1 remains Draft/Open/Unmerged. No Production deployment or promotion is authorized by this runbook.
+
+
 ## Storage design
 
 The durable archive provider is a private Google Drive folder. GitHub Actions fetches and quality-checks NASA POWER daily data, then stores versioned JSON objects through the Google Drive API. The Vercel API reads the same files and validates their embedded SHA-256 digest before using them.
@@ -54,26 +64,26 @@ Add the same four **GitHub repository Actions Secrets** and **Vercel Production 
 
 No AWS account, bucket, IAM role, OIDC trust, or S3 variables are required. Do not put credentials in GitHub Variables, source files, browser code, or chat. Vercel values must be server-side environment variables only.
 
-In GitHub, add a repository **Variable** named `GOOGLE_DRIVE_ARCHIVE_ENABLED` with value `true` only after the four secrets are set and the preflight succeeds. This enables the scheduled weekly refresh. A manual workflow dispatch always performs its own preflight.
+In GitHub, add a repository **Variable** named `GOOGLE_DRIVE_ARCHIVE_ENABLED` with value `true` only after the four secrets are set and the preflight succeeds. This enables the scheduled weekly refresh **only after** `.github/workflows/history-refresh.yml` has been merged into the default branch. At present that workflow file is feature-branch-only, so weekly scheduled refresh is not active on `main`. A manual workflow dispatch always performs its own preflight.
 
 ## Backfill and resume
 
-1. Open Actions → **Backfill nine-region NASA POWER daily history**.
-2. Dispatch a small initial test window first (for example, 2025–2025) to confirm upload and read-back.
-3. Confirm files appear under the private root folder in the expected region/year layout.
-4. Then dispatch 2016–2025. The workflow processes at most three regions concurrently. Existing checksum-valid year files are reused; only missing or invalid years are fetched.
-5. Each region reports JSON-lines progress and a final job result. A failed region does not stop other region jobs; the overall workflow still reports failure if one region fails.
+1. The 2025–2025 POWER daily archive is already complete and readable for all nine reference points (365/365 each). Do not rerun 2025 merely as a connectivity test.
+2. To fill the older daily gaps, open Actions → **Backfill nine-region NASA POWER daily history**. This workflow file exists on `main`; choose the branch `feat/krishinexus-real-data-school-lab` in the workflow branch selector so the current feature-branch script is used.
+3. Dispatch `start_year=2016`, `end_year=2025`. Existing checksum-valid 2025 objects are reused; only missing or invalid years should be fetched.
+4. Confirm files appear under the private root folder in the expected region/year layout and that remote read-back matches the uploaded bytes and SHA-256.
+5. The workflow processes at most three regions concurrently. Each region reports JSON-lines progress and a final job result. A failed region does not stop other region jobs; the overall workflow still reports failure if one region fails.
 
-The current-year refresh is scheduled weekly. It stores year-to-date files and only requests new data when the available date advances.
+The weekly YTD refresh workflow is currently branch-only. Scheduled workflows use the default branch, so it will not execute until `.github/workflows/history-refresh.yml` is merged into `main` and `GOOGLE_DRIVE_ARCHIVE_ENABLED=true` is set. Merging that workflow file may trigger a Vercel Production redeploy from unchanged app code; review this side effect before approval.
 
 ## API verification
 
 After the branch is deployed and Vercel environment variables are set, verify:
 
 - `GET /api/status`: `archive_storage.provider` should be `google_drive` and `credentials_configured` should be true. This is configuration evidence, not a live connection test.
-- `GET /api/history/mymensingh?start_year=2025&end_year=2025`: response should report `archive_representation: daily`, `status: complete`, and 365 daily observations (assuming the backfill succeeded).
-- `GET /api/data-status/mymensingh`: POWER should report `ready` and the archive kind should identify daily history.
-- Repeat for all nine regions after the full backfill.
+- `GET /api/history/{region}?start=2025-01-01&end=2025-12-31`: all nine current reference points have already been verified as `archive_representation: daily`, `status: complete`, 365/365 observations and full coverage.
+- `GET /api/data-status/{region}`: NASA POWER should report `ready` through `2025-12-31`; satellite products remain independent and may report `not_archived`.
+- For older POWER history, repeat the checks for 2016–2024 after the historical backfill completes. Do not call the archive a complete 2016–2025 daily dataset until every region/year passes.
 
 An HTTP 200 alone is not proof of complete daily coverage. Inspect status, missing years, day counts, and provenance.
 
@@ -84,8 +94,8 @@ An HTTP 200 alone is not proof of complete daily coverage. Inspect status, missi
 - Standard Google Drive API usage currently has no additional API-use charge. Google has announced usage thresholds and potential charges for usage above standard daily limits later in 2026. The nine-point climate archive is expected to remain far below normal transfer limits; monitor usage before large bulk transfers.
 - Keep the root folder private. The adapter requests `drive.file`, not broad access to all Drive files.
 - Refresh tokens can be revoked or expire. If OAuth access is revoked, rerun the bootstrap and replace all four secret values consistently.
-- Drive is file/object storage, not a transactional database. The analysis run store remains `process_memory`; durable refresh-job queueing still requires a separate PostgreSQL service. Do not connect this project to an unrelated Supabase database.
+- Drive is private object storage, not a transactional database. Signed-in analysis runs, source states, result revisions and the analysis worker queue live in the FieldShift0 Supabase project (`bipyrlegaxmhwzwrmcmi`). The separate `POST /api/refresh-jobs` regional POWER refresh queue still requires `FIELD_SHIFT_JOBS_DSN`; do not confuse it with the authenticated analysis queue or connect an unrelated Supabase project.
 
 ## Scientific boundaries
 
-NASA POWER values are gridded representative-point samples, not field sensors, district averages, official AEZ means, or farm-specific observations. The existing Mymensingh 2016–2025 monthly aggregate remains a separate chart-only product. It is not converted into daily records. This workflow does not ingest or validate SMAP, MODIS MOD16, HLS, or GPM archives. Crop/soil recommendations remain a Mymensingh pilot pending Bangladesh field calibration.
+NASA POWER values are gridded representative-point samples, not field sensors, district averages, official AEZ means, or farm-specific observations. The existing Mymensingh 2016–2025 monthly aggregate remains a separate chart-only product. It is not converted into daily records. This POWER workflow does not ingest or validate SMAP, MODIS MOD16, HLS, or GPM archives. The SMAP workflow is currently present on PR #1's feature branch but absent from `main`. GitHub only exposes a manual `workflow_dispatch` workflow when its file exists on the default branch. A separate one-file Draft [PR #2](https://github.com/moshiour0/FieldShift0/pull/2) registers it; after explicit approval/merge, select `feat/krishinexus-real-data-school-lab` as the run ref and use `2025–2025` for the first pilot. The merge may trigger a Vercel Production redeploy. The pilot must pass Google Drive write/read/delete preflight, Earth Engine collection visibility, all nine region jobs, 365 days, eight valid 3-hourly intervals per day in both SMAP bands, remote Drive read-back and SHA-256 verification before any longer SMAP archive is started. Crop/soil recommendations remain a Mymensingh pilot pending Bangladesh field calibration.

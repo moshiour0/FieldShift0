@@ -71,7 +71,7 @@ The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` for al
 
 ## Remaining acceptance gates
 
-1. Dispatch the **SMAP Reference-Point Backfill** GitHub Actions workflow on this branch for the default 2025–2025 pilot. Confirm preflight, all nine point jobs, exactly 365 daily records per point, both `sm_surface` and `sm_rootzone`, exactly eight 3-hourly intervals per day, full coverage, private Drive read-back and SHA-256 verification. Do not start 2016–2025 until the 2025 pilot passes and runtime/volume are reviewed.
+1. **SMAP 2025 reference-point pilot:** The workflow file is currently absent from `main`; GitHub only exposes a `workflow_dispatch` workflow when the file exists on the default branch. Separate one-file Draft [PR #2](https://github.com/moshiour0/FieldShift0/pull/2) registers `.github/workflows/smap-reference-backfill.yml`. After explicit approval/merge of PR #2, open Actions → **Backfill nine-reference-point NASA SMAP archive**, select branch `feat/krishinexus-real-data-school-lab`, and keep `start_year=2025`, `end_year=2025`. The workflow then uses the scripts/adapters from PR #1's branch. Require the preflight, all nine point jobs, exactly 365 daily records per point, both `sm_surface` and `sm_rootzone`, exactly eight 3-hourly intervals per day, full coverage, private Drive read-back and SHA-256 verification. Do not start 2016–2025 until the 2025 pilot passes and runtime/volume are reviewed. Merging PR #2 may trigger a Vercel Production redeploy from unchanged application code; review that side effect first.
 2. Run one real authenticated Preview analysis from a human-controlled test account. Verify queue creation, a worker result revision, source states, My Runs listing, sign-out/sign-in restoration, and reopening after at least one day.
 3. Test two separate user accounts and prove cross-account reads/rechecks are rejected by RLS.
 4. Validate real AppEEARS task resume and the second-attempt SMAP path. A configured credential flag is not a provider test.
@@ -84,12 +84,12 @@ The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` for al
 
 ### Manual SMAP 2025 pilot
 
-1. GitHub → Actions → **SMAP Reference-Point Backfill**.
-2. Select branch `feat/krishinexus-real-data-school-lab`.
-3. Keep `start_year=2025` and `end_year=2025`.
-4. Run once. Preflight must pass before GEE or Drive ingestion.
-5. Review all nine region jobs and the final workflow conclusion. A green workflow with an incomplete region is not accepted.
-6. Confirm the archive object count, QA gates, and remote bytes/checksum verification before proceeding.
+1. Confirm separate one-file PR #2 has been approved and merged so the workflow file exists on `main`. This is not approval to merge PR #1. Review first: a main commit may trigger Vercel Production redeployment even though application code is unchanged.
+2. GitHub → Actions → **Backfill nine-reference-point NASA SMAP archive**.
+3. Select branch `feat/krishinexus-real-data-school-lab` so the complete workflow/scripts/adapters from PR #1's feature branch are used.
+4. Keep `start_year=2025` and `end_year=2025` for the first pilot.
+5. Run once. Drive temporary write/read/delete and Earth Engine asset-visibility preflight must pass before SMAP daily ingestion begins.
+6. Review all nine region jobs and the final workflow conclusion. A green workflow with an incomplete region is not accepted. Require 365 daily rows, 8/8 intervals for both SMAP bands, complete coverage, private Drive remote bytes/read-back and SHA-256 verification.
 
 ### User acceptance test in Preview
 
