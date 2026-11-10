@@ -862,3 +862,45 @@ def test_health_reports_consistent_product_engine_version():
     response = TestClient(app).get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "engine": "3.0.0", "product": "3.3.0"}
+
+
+def test_power_baseline_keeps_unarchived_field_on_its_own_live_coordinate(monkeypatch, tmp_path):
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    field.lat = 24.751
+    field.lon = 90.412
+    archive_calls = []
+    live_calls = []
+    provenance = Provenance(source="NASA POWER", source_type="observed/model-derived")
+    rows = tuple(
+        WeatherDay(
+            d=date.fromordinal(START.toordinal() + offset),
+            tmax_c=30.0,
+            tmin_c=22.0,
+            rh_mean_pct=70.0,
+            wind_2m_ms=1.0,
+            solar_rad_mj_m2_day=18.0,
+            rain_mm=0.5,
+            source="NASA POWER (live)",
+            provenance=provenance,
+        )
+        for offset in range((END - START).days + 1)
+    )
+
+    def archive_lookup(lat, lon, start, end):
+        archive_calls.append((lat, lon, start, end))
+        return None
+
+    def live_lookup(lat, lon, start, end, **kwargs):
+        live_calls.append((lat, lon, start, end))
+        return rows
+
+    monkeypatch.setattr(pipeline, "archived_weather_details", archive_lookup)
+    monkeypatch.setattr(pipeline, "power_daily", live_lookup)
+
+    baseline, record = pipeline._load_power_baseline(field, START, END, tmp_path)
+
+    assert baseline == rows
+    assert archive_calls == [(24.751, 90.412, START, END)]
+    assert live_calls == [(24.751, 90.412, START, END)]
+    assert record["retrieval_mode"] == "live"
+    assert record["quality_status"] if "quality_status" in record else record["source"] == "NASA POWER"
