@@ -26,11 +26,12 @@ class WorkerAPIError(RuntimeError):
 
 
 def configured_worker_token() -> str:
-    """Resolve the same server-only token aliases used by the tick route."""
-    return (
-        os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip()
-        or os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip()
-    )
+    """Return the first configured worker-token alias that meets the minimum length."""
+    for name in ("FIELDSHIFT_WORKER_TOKEN", "FIELD_SHIFT_WORKER_SECRET"):
+        candidate = os.getenv(name, "").strip()
+        if len(candidate) >= 48:
+            return candidate
+    return ""
 
 
 def _settings(worker_token_override: str | None = None) -> tuple[str, str, str, str]:

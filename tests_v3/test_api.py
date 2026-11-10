@@ -27,16 +27,27 @@ class TestAPI(unittest.TestCase):
             "FIELDSHIFT_WORKER_TOKEN": "",
             "FIELD_SHIFT_WORKER_SECRET": "x" * 48,
         }
-        with patch.dict(os.environ, base_env, clear=False):
-            response = c.get("/api/status")
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["analysis_state"]["active_execution_durable_across_instances"])
-
-        base_env["FIELD_SHIFT_WORKER_SECRET"] = "too-short"
-        with patch.dict(os.environ, base_env, clear=False):
-            response = c.get("/api/status")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["analysis_state"]["active_execution_durable_across_instances"])
+        cases = [
+            ("", "x" * 48, True),
+            ("too-short", "x" * 48, True),
+            ("", "too-short", False),
+        ]
+        for primary, fallback, expected in cases:
+            with self.subTest(primary_length=len(primary), fallback_length=len(fallback)), patch.dict(
+                os.environ,
+                {
+                    **base_env,
+                    "FIELDSHIFT_WORKER_TOKEN": primary,
+                    "FIELD_SHIFT_WORKER_SECRET": fallback,
+                },
+                clear=False,
+            ):
+                response = c.get("/api/status")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.json()["analysis_state"]["active_execution_durable_across_instances"],
+                expected,
+            )
 
     def test_account_runs_requires_a_supabase_session(self):
         c = TestClient(app)
