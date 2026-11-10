@@ -1,0 +1,61 @@
+name: Publish quality-gated NASA POWER archive
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 3 * * 2"
+permissions:
+  contents: read
+concurrency:
+  group: fieldshift-power-history-refresh
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.GOOGLE_DRIVE_ARCHIVE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Google Drive archive access before provider requests
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GOOGLE_DRIVE_CLIENT_ID" || -z "$GOOGLE_DRIVE_CLIENT_SECRET" || -z "$GOOGLE_DRIVE_REFRESH_TOKEN" || -z "$GOOGLE_DRIVE_FOLDER_ID" ]]; then
+            echo "::error::Add all four GOOGLE_DRIVE_* repository Actions Secrets before dispatching this workflow. No NASA data request was started."
+            exit 1
+          fi
+          python scripts/google_drive_archive.py verify
+  ingest:
+    needs: preflight
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.GOOGLE_DRIVE_ARCHIVE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FieldShift
+        run: python -m pip install -e .
+      - name: Refresh recent NASA POWER history for all nine regions
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: python scripts/prefetch_ytd.py
+      - name: Archive last completed year for all nine regions
+        env:
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: |
+          archive_year=$(( $(date -u +%Y) - 1 ))
+          python scripts/prefetch_history.py --start-year "$archive_year" --end-year "$archive_year"
