@@ -7,8 +7,8 @@ from unittest.mock import patch
 os.environ.setdefault("FIELD_SHIFT_LIVE_NASA", "0")
 from fastapi.testclient import TestClient
 
-from fieldshift.api.app import app
 from fieldshift.api import product
+from fieldshift.api.app import app
 
 
 class TestAPI(unittest.TestCase):
