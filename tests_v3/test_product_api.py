@@ -43,16 +43,28 @@ class TestProductAPI(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         data = r.json()
         run_id = data["run"]["id"]
-        self.assertEqual(self.client.get(f"/api/analysis/{run_id}").status_code, 200)
-        self.assertEqual(self.client.get(f"/api/analysis/{run_id}/strategies").status_code, 200)
-        self.assertEqual(self.client.get(f"/api/analysis/{run_id}/scenarios").status_code, 200)
-        self.assertEqual(self.client.get(f"/api/analysis/{run_id}/report").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/analysis/{run_id}").status_code, 404)
+        self.assertEqual(self.client.get(f"/api/analysis/{run_id}/strategies").status_code, 404)
+        self.assertEqual(self.client.get(f"/api/analysis/{run_id}/scenarios").status_code, 404)
+        self.assertEqual(self.client.get(f"/api/analysis/{run_id}/report").status_code, 404)
         if data["evidence"]["items"]:
             eid = data["evidence"]["items"][0]["id"]
-            self.assertEqual(self.client.get(f"/api/analysis/{run_id}/evidence/{eid}").status_code, 200)
-        what_if = self.client.post(f"/api/analysis/{run_id}/what-if", json={"scenario": "dry"})
+            self.assertEqual(self.client.get(f"/api/analysis/{run_id}/evidence/{eid}").status_code, 404)
+        what_if = self.client.post(
+            f"/api/analysis/{run_id}/what-if",
+            json={
+                "scenario": "dry",
+                "field": data["field"],
+                "priorities": data["priorities"],
+                "evidence_window": data["run"]["evidence_window"],
+            },
+        )
         self.assertEqual(what_if.status_code, 200)
         self.assertIn("strategies", what_if.json())
+        report = self.client.post(
+            f"/api/analysis/{run_id}/report", json={"data": data}
+        )
+        self.assertEqual(report.status_code, 200)
 
 
 if __name__ == "__main__":

@@ -150,15 +150,19 @@ class TestAPI(unittest.TestCase):
                 self.assertEqual(response.status_code, 404, path)
             get_live_analysis.assert_not_called()
 
-    def test_live_what_if_requires_a_verified_account_session(self):
+    def test_live_what_if_uses_only_the_client_snapshot_without_session(self):
         c = TestClient(app)
-        with patch("fieldshift.api.app.what_if") as what_if_call:
+        with patch("fieldshift.api.app.what_if", return_value={"ok": True}) as what_if_call:
             response = c.post(
                 "/api/analysis/run_private_123/what-if",
-                json={"scenario": "dry", "field": {"id": "field_1"}},
+                json={"scenario": "dry", "field": {"id": "caller_field"}},
             )
-        self.assertEqual(response.status_code, 401)
-        what_if_call.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        what_if_call.assert_called_once_with(
+            "run_private_123",
+            {"scenario": "dry", "field": {"id": "caller_field"}},
+        )
 
     def test_public_demo_analysis_read_remains_available(self):
         c = TestClient(app)

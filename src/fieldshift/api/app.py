@@ -501,7 +501,11 @@ def analysis_what_if(run_id: str, payload: dict[str, Any], request: Request) -> 
         # The static public demo can be explored anonymously. Every live what-if
         # requires a real session; the product layer uses only this caller's
         # submitted field snapshot and never reads another live run from memory.
-        token, _ = _auth_context(request, required=run_id != "demo_mymensingh_v3")
+        # A live what-if accepts only the caller's submitted field snapshot;
+        # product.what_if never loads a live run by run ID. A supplied token is
+        # still validated and enables account persistence, but anonymous
+        # compatibility clients cannot read another run's cached field.
+        token, _ = _auth_context(request, required=False)
         response = what_if(run_id, payload)
         if token:
             _persist_authenticated_response(request, payload, response)
