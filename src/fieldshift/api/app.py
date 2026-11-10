@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fieldshift.api import supabase_auth
-from fieldshift.api.analysis_worker import WorkerAPIError, configured_worker_token
+from fieldshift.api.analysis_worker import WorkerAPIError, worker_is_configured
 from fieldshift.api.analysis_worker import process_one as process_analysis_worker_one
 from fieldshift.api.product import (
     create_analysis,
@@ -284,7 +284,7 @@ def integration_status() -> dict[str, Any]:
             "storage": "supabase_queue_and_versioned_postgres_results_for_signed_in_runs",
             "completed_signed_in_runs_durable_across_instances": bool(supabase_auth.settings()["configured"]),
             "active_execution_durable_across_instances": bool(
-                supabase_auth.settings()["configured"] and len(configured_worker_token()) >= 48
+                supabase_auth.settings()["configured"] and worker_is_configured()
             ),
         },
     }

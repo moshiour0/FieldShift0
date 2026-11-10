@@ -44,6 +44,15 @@ def _settings(worker_token_override: str | None = None) -> tuple[str, str, str, 
     return base_url, publishable_key, anon_jwt, worker_token
 
 
+def worker_is_configured() -> bool:
+    """Return whether the worker has every setting required for a real execution."""
+    try:
+        _settings()
+    except WorkerAPIError:
+        return False
+    return True
+
+
 def _rest_json(
     path: str,
     *,

@@ -18,7 +18,7 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["engine"], "3.0.0")
 
-    def test_worker_status_uses_the_same_token_aliases_as_worker_execution(self):
+    def test_worker_status_matches_all_worker_execution_settings(self):
         c = TestClient(app)
         base_env = {
             "SUPABASE_URL": "https://example.supabase.co",
@@ -28,17 +28,26 @@ class TestAPI(unittest.TestCase):
             "FIELD_SHIFT_WORKER_SECRET": "x" * 48,
         }
         cases = [
-            ("", "x" * 48, True),
-            ("too-short", "x" * 48, True),
-            ("", "too-short", False),
+            ("", "x" * 48, "anon_test", "sb_publishable_test", True),
+            ("too-short", "x" * 48, "anon_test", "sb_publishable_test", True),
+            ("", "too-short", "anon_test", "sb_publishable_test", False),
+            ("", "x" * 48, "", "sb_publishable_test", False),
+            ("", "x" * 48, "anon_test", "", False),
         ]
-        for primary, fallback, expected in cases:
-            with self.subTest(primary_length=len(primary), fallback_length=len(fallback)), patch.dict(
+        for primary, fallback, anon_key, publishable_key, expected in cases:
+            with self.subTest(
+                primary_length=len(primary),
+                fallback_length=len(fallback),
+                anon_key_present=bool(anon_key),
+                publishable_key_present=bool(publishable_key),
+            ), patch.dict(
                 os.environ,
                 {
                     **base_env,
                     "FIELDSHIFT_WORKER_TOKEN": primary,
                     "FIELD_SHIFT_WORKER_SECRET": fallback,
+                    "SUPABASE_ANON_KEY": anon_key,
+                    "SUPABASE_PUBLISHABLE_KEY": publishable_key,
                 },
                 clear=False,
             ):
