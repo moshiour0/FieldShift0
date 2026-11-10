@@ -2,6 +2,8 @@
 
 # FieldShift V3.3 / KrishiNexus — NASA-informed agricultural decision support
 
+> **Current owner handoff (10 November 2026):** See the [Final Handoff](docs/v3/FINAL_HANDOFF_2026-11-10.md) for exact branch/CI/Preview evidence, dataset coverage, operator steps and outstanding acceptance gates. The feature branch is still Draft; Production has not been promoted.
+
 FieldShift V3 is the upgraded decision-support engine for NASA Space Apps 2026 “Field Shift: Adapting Farms with NASA Data”. V2 is retained for compatibility; the production path is now `fieldshift.v3`.
 
 ## V3 objective
@@ -192,7 +194,7 @@ The field form accepts soil pH, soil organic carbon, and sand/silt/clay percenta
 
 After deployment, check `/health`, `/api/status`, and `/api/demo` on the deployment URL before running a new analysis.
 
-For the full variable checklist, route diagnostics, current implementation gaps, and product roadmap, see [Vercel deployment](docs/VERCEL_DEPLOYMENT.md) and the [readiness audit](docs/AUDIT_AND_ROADMAP.md). `/api/status` reports environment-variable presence only; it does not prove NASA or Earth Engine connectivity. Analysis records are currently held in process memory and need a durable shared store before production run-history use.
+For the full variable checklist and route diagnostics, see [Vercel deployment](docs/VERCEL_DEPLOYMENT.md) and the [readiness audit](docs/AUDIT_AND_ROADMAP.md). `/api/status` reports safe configuration presence only; it does not validate NASA, Earth Engine, AppEEARS or Google Drive connectivity. In the signed-in main dashboard, new analyses use `POST /api/analysis/queue` and the Supabase-backed worker/run/source/result records; `My Runs` reads those durable records. The unauthenticated synchronous `/api/analysis/run` compatibility path (including the current Learning Lab client) is not a durable saved-run workflow. Confirm a real sign-in and saved-run acceptance test before relying on account continuity.
 
 
 

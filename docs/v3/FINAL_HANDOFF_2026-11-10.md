@@ -4,23 +4,26 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR:** [#1 — Draft / Open / Unmerged](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Latest exact-head Preview:** https://field-shift0-4xuq3ds53.vercel.app  
+**Latest exact-head Preview:** https://field-shift0-hbmuwnxdu.vercel.app  
+**Runtime-code Preview:** https://field-shift0-nttj3iysm.vercel.app  
 **Supabase:** FieldShift0 project, ref `bipyrlegaxmhwzwrmcmi`  
 **Production:** not promoted by this handoff.
 
-## Latest verification snapshot — 2026-11-10 15:36 UTC
+## Latest verification snapshot — 2026-11-10 15:40 UTC
 
-- Latest validated runtime/code commit: `f2baa301dc30fbe6dc71d7076a41a30336b57b76` (the following handoff-only documentation commit does not change runtime code).
-- Exact-head GitHub Actions PR run #560 (`42845858427`) succeeded on Python 3.11 and 3.12: **178 passed, 1 non-blocking warning** in each job; `compileall`, strict Ruff and mypy also passed.
-- Earlier run #552/#553 failed on an outdated `/health` expectation; `0d3546d` restored the `engine=3.0.0` / `product=3.3.0` API contract. Run #558 then surfaced two strict Ruff findings in a test stub; `f2baa301` removed the redundant explicit `return None`, and run #560 verifies the final fix.
-- Exact-head Vercel Preview is READY: `https://field-shift0-nttj3iysm.vercel.app`, deployment `dpl_5La2bQJp5nusHheaJTAUgW99ns27`, source SHA `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
-- Exact-head GET smoke checks: `/` HTTP 200, `/health` HTTP 200 (`engine=3.0.0`, `product=3.3.0`), `/api/status` HTTP 200, and `/api/auth/config` HTTP 200 with `configured=true`, provider `email_magic_link`. The 12 planning groups and 9 reference points are returned by `/api/regions`.
-- Full-year `/api/history/{region}` checks for 2025 succeeded for all nine reference coordinates: daily archive representation, 365/365 records, coverage 1.0, no missing years, and an embedded SHA-256 for every region. The code path reads exact annual Google Drive objects when configured; the pipeline's archive-first helper requires an exact coordinate, complete dates and a verified checksum. The unit tests also assert that an off-anchor coordinate never borrows a nearby reference point.
-- The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` at all nine reference points. The full 2016–2025 daily archive is not complete: the bundled Mymensingh 2016–2025 monthly data remain chart-only, and daily full-year proof presently covers 2025 only.
-- Supabase `FieldShift0` is `ACTIVE_HEALTHY`, with 23 recorded migrations. The single `fieldshift-analysis-worker` cron is active at `*/5 * * * *`; its latest observed tick succeeded at 15:30 UTC. The run/source/result/event/job/cache/profile tables contain zero rows, so no real authenticated user run or revision lifecycle is proven.
-- Preview runtime error aggregation returned no errors in the checked one-hour window. Full-year 2025 history was rechecked against this exact Preview for all nine reference points: each returned `365/365`, `coverage_fraction=1.0`, daily representation and SHA-256 provenance.
-- The Preview environment's `FIELD_SHIFT_WORKER_SECRET` is now stored as a non-readable Sensitive/Secret variable; its value was not read or changed. Google Drive, AppEEARS, GEE and Supabase configuration entries are present, but a configuration flag alone is not provider validation.
-- No PR merge, Production promotion, alias change, billing/plan change, Production environment edit, or ownership transfer was performed.
+- Current PR head: `f4417bf5107d001fac848d549e709b620eda66c5`. Its latest commit updates handoff documentation; runtime code is at `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
+- Exact-head GitHub Actions PR run #562 (`42846659223`) succeeded on Python 3.11 and 3.12: **178 passed, 1 non-blocking warning** in each job. `compileall`, strict Ruff and mypy (34 source files) passed in both jobs.
+- Exact-head Vercel Preview is READY: `https://field-shift0-hbmuwnxdu.vercel.app`, deployment `dpl_U5ppyfczeMtA7PKdDch7WNbuPvRo`, source SHA equals the current PR head. The latest runtime-code Preview is READY at `https://field-shift0-nttj3iysm.vercel.app`, deployment `dpl_5La2bQJp5nusHheaJTAUgW99ns27`, source SHA `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
+- Exact-head GET checks: `/` HTTP 200, `/health` HTTP 200 (`engine=3.0.0`, `product=3.3.0`), `/api/status` HTTP 200, `/api/auth/config` HTTP 200 with `configured=true` and `email_magic_link`, `/api/regions` returned 12 planning groups and 9 reference points, and `/school-game/` served the Bengali Learning Lab.
+- Full-year `/api/history/{region}` checks on the exact-head Preview for 2025 succeeded for all nine reference coordinates: daily representation, 365/365 records, `coverage_fraction=1.0`, no missing years and SHA-256 provenance. These are gridded reference-point samples—not farm sensors, district averages, official AEZ means or arbitrary-coordinate data.
+- All nine `/api/data-status/{region}` results report NASA POWER `ready` through 2025-12-31. The same nine points report SMAP, HLS, MODIS MOD16 and GPM as `not_archived`. The Mymensingh 2016–2025 monthly history remains chart-only; a complete 2016–2025 daily archive is not claimed.
+- The exact-coordinate POWER archive-first integration is in runtime commit `5c3040c` and has tests for checksum validation, exact-coordinate-only reuse, live fallback and no off-anchor reference-point substitution. Latest CI verifies these tests. An authenticated user-request exercise of that pipeline has not yet been performed.
+- Supabase `FieldShift0` is `ACTIVE_HEALTHY`, with 23 migrations. Exactly one `fieldshift-analysis-worker` cron is active at `*/5 * * * *`. Latest `net._http_response` records show HTTP 200, `processed=false`, and “No queued analysis job is ready.” This proves a healthy idle worker tick—not a completed user job.
+- The account/run/source/result/event/job/cache/profile tables contain zero records. No real signed-in user run, saved result revision or one-/two-day account restoration has been proven.
+- Supabase security advisor still reports one intentional owner-scoped `SECURITY DEFINER` recheck RPC warning, plus two private queue RLS performance warnings. Do not remove owner checks or weaken worker-token policies just to silence the advisor. Four unused-index informational findings are not a reason to drop indexes on an empty database.
+- Preview runtime error aggregation returned no errors in the checked one-hour window.
+- Preview environment metadata confirms the worker token is stored as a non-readable Sensitive variable; Google Drive, AppEEARS, GEE and Supabase settings are present. Their presence is not a provider connection/credential validation: `/api/status` reports Drive `connection_tested=false`, AppEEARS/GEE `credentials_validated=false`, and POWER `connectivity_tested=false`.
+- No PR merge, Production promotion, Production environment edit, domain/alias change, billing/plan change, or account ownership transfer was performed.
 
 ## What is delivered in the codebase
 

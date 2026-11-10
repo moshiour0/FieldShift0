@@ -10,11 +10,15 @@
 
 ---
 
-## 0. Latest POWER archive and Preview evidence — 2026-11-10
+## 0. Latest POWER archive and Preview evidence — 2026-11-10 15:40 UTC
 
-The exact-head Preview was checked for each configured reference point over 2025-01-01 through 2025-12-31. All nine returned daily representation, 365 available days out of 365 expected, full coverage, no missing years, and an embedded SHA-256 archive checksum. These data are NASA POWER gridded reference-point histories, not field measurements or spatially complete Bangladesh coverage. The archive-first pipeline change now uses a complete annual archive only on an exact coordinate/date match; all other requests retain the live POWER path.
+Current PR head `f4417bf5107d001fac848d549e709b620eda66c5` has a READY exact-head Preview at `https://field-shift0-hbmuwnxdu.vercel.app`. Runtime implementation SHA is `f2baa301dc30fbe6dc71d7076a41a30336b57b76`. Exact-head PR CI run #562 passed: 178 tests on Python 3.11 and 3.12, plus compileall, Ruff and mypy.
 
-The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` at all nine reference points. The 2025 SMAP reference-point pilot has not yet been dispatched. No arbitrary-location national SMAP grid archive exists.
+The current Preview was checked for every configured reference point over 2025-01-01 through 2025-12-31. All nine returned daily representation, 365 available days out of 365 expected, full coverage, no missing years and embedded SHA-256 archive provenance. These are NASA POWER gridded reference-point histories, not field measurements, area averages, official AEZ averages or nationwide spatial coverage.
+
+The processing pipeline now checks this verified archive before a live POWER request, but only for an exact configured reference coordinate and a complete requested date span. An off-anchor farm coordinate is not substituted with a nearby point: it continues through its own live POWER request. Regression tests enforce that boundary.
+
+The same Preview reports SMAP, HLS, MODIS MOD16 and GPM as `not_archived` at all nine reference points. The 2025 SMAP reference-point pilot has not yet been dispatched. No arbitrary-location or national SMAP grid archive exists.
 
 ## 0. Read this first in a future chat
 

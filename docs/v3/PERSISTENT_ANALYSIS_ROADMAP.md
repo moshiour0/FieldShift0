@@ -1,20 +1,22 @@
 # KrishiNexus — Persistent Analysis, Delayed Data Recovery & User Accounts Roadmap
 
 > **Status:** Active implementation handoff  
-> **Last updated:** 2026-11-09 (Asia/Dhaka)  
+> **Last updated:** 2026-11-10 (Asia/Dhaka)  
 > **Repository:** moshiour0/FieldShift0  
 > **Working branch:** feat/krishinexus-real-data-school-lab  
 > **Pull request:** #1 — Draft / Open / Unmerged (do not merge without explicit approval)  
 > **Production rule:** Do not promote this feature branch to Production without explicit approval.
 
-## 0. Latest operational checkpoint — 2026-11-10
+## 0. Latest operational checkpoint — 2026-11-10 15:40 UTC
 
-- The live Preview exposes complete 2025 daily NASA POWER archive data for all nine configured representative reference points. Full-year checks returned `365/365`, `coverage_fraction=1.0`, `status=complete`, no missing years and SHA-256 provenance. The archives were timestamped 2026-11-09.
-- This is a nine-point exact-coordinate reference archive, not a field measurement, zone average, official AEZ average or national grid.
-- On the same Preview, SMAP, HLS, MODIS MOD16 and GPM still report `not_archived` for all nine reference points. The actual 2025 SMAP pilot remains outstanding.
-- Supabase is `ACTIVE_HEALTHY`; the five-minute worker cron is active and its most recent observed tick succeeded. Account/run/source/result/event/job/cache tables contain zero records, so no real authenticated analysis run has yet been proven.
-- The exact PR head `e1b58614b6a371b27c395b36e1ef8c130eba2132` passed PR CI run #551 (Python 3.11 and 3.12) and has a READY exact-head Preview. A new archive-first integration change is being added after this checkpoint; re-run CI and verify its new exact-head Preview before treating the code as deployed.
-- Do not merge PR #1 or promote Production without explicit release approval.
+- Current PR head: `f4417bf5107d001fac848d549e709b620eda66c5` (documentation-only after runtime commit `f2baa301dc30fbe6dc71d7076a41a30336b57b76)); PR #1 is still Open/Draft/Unmerged.
+- Exact-head CI run #562 (`42846659223`) passed on Python 3.11 and 3.12: 178 tests per job, compileall, strict Ruff and mypy (34 source files).
+- Exact-head Preview is READY at `https://field-shift0-hbmuwnxdu.vercel.app` (deployment `dpl_U5ppyfczeMtA7PKdDch7WNbuPvRo`). The runtime-code Preview at `https://field-shift0-nttj3iysm.vercel.app` is also READY and matches runtime SHA `f2baa301dc30fbe6dc71d7076a41a30336b57b76`.
+- All nine reference-point 2025 POWER history endpoints returned daily, complete 365/365 coverage, no missing dates and SHA-256 provenance. All nine data-status endpoints report POWER ready and SMAP/HLS/MOD16/GPM not_archived. These are exact gridded reference samples, not farm observations or district averages.
+- The POWER processing pipeline now checks a complete, checksum-validated annual archive only for an exact reference coordinate/date window; non-reference coordinates continue to their own live POWER request. CI tests enforce checksum rejection and no reference-point substitution.
+- Supabase is ACTIVE_HEALTHY; one five-minute worker cron is active. Latest safe worker response was HTTP 200 with processed=false / no queued job. Durable analysis/run/source/result/event/job/cache/profile tables remain empty, so real authenticated user continuity is not yet proven.
+- Preview auth configuration is present, but actual Magic Link login, My Runs persistence, delayed return, two-user isolation and real NASA provider-task resume remain untested. Drive/AppEEARS/GEE configuration metadata is not live credential validation.
+- No merge, Production promotion or ownership transfer is authorized/performed. Do not promote Production without explicit user approval.
 
 ## 0. Read this first in a future chat
 
@@ -71,11 +73,11 @@ Relevant files:
 
 Verified findings from code inspection:
 
-1. product.py stores runs in an in-process dictionary named _RUNS. The API status endpoint explicitly reports analysis_state.storage=process_memory and durable_across_instances=false. A Vercel function instance restart or a request routed to another instance can therefore lose the saved run.
-2. create_analysis() runs _run_engine() synchronously, then stores the result in _RUNS. It is not a durable queued-run workflow.
-3. The browser's pending-source refresh re-posts the whole /api/analysis/run payload. It is browser-timer driven, stops after at most 20 checks, and is lost when the page is closed. It can recompute the whole analysis instead of refreshing only the missing source.
-4. The browser checks only pending and retrying evidence statuses. A partial source (for example, a dataset with incomplete date coverage) is not automatically rechecked. However, partial does not always mean delayed: it can mean the provider product does not cover the requested dates. It must not be retried forever without provider evidence.
-5. product.py currently labels a run pending only when some evidence item is pending or retrying. Other incomplete states (partial, stale, unavailable, not_configured, error, fallback) can otherwise yield run.status=complete. This is scientifically misleading.
+1. product.py still keeps `_RUNS` for the synchronous compatibility/anonymous `POST /api/analysis/run` path and legacy GET/what-if/report routes. The signed-in main dashboard instead submits to `POST /api/analysis/queue`; it persists an immutable request through the authenticated Supabase RPC and exposes the owner-scoped `/api/account/runs` list/detail/recheck routes. The durable path and the legacy process-memory path must not be conflated.
+2. `create_analysis()` runs `_run_engine()` synchronously for the compatibility route. A signed-in main-dashboard request uses the queued background worker and does not hold the HTTP request open for the full analysis.
+3. The signed-in dashboard polls the saved run and has a My Runs recovery path; the request, source states and result revisions stay in Supabase when the browser closes. The synchronous unauthenticated/legacy path can still use browser-timer refresh and is not a substitute for durable saved-run continuity. The educational Learning Lab currently calls the synchronous `/api/analysis/run` endpoint.
+4. The synchronous product response and compatibility path still have narrower pending-source refresh semantics. The durable worker stores per-source status/retry state; partial must not be treated as automatically retryable because it can also represent genuine provider date/coverage limits.
+5. The legacy synchronous `product.py` response can label a run complete based on its own reduced pending/retrying logic; its output must not be confused with the signed-in worker lifecycle statuses (`preliminary_ready`, `waiting_for_data`, `final_ready`, `final_with_gaps`).
 6. refresh_jobs.py has a durable job-table concept, but on Vercel it requires FIELD_SHIFT_JOBS_DSN and a durable database. It currently supports NASA POWER YTD refresh only, not a user's complete multi-source analysis lifecycle. The route currently hashes request.client.host as an owner/rate-limit identity; this is not a user-account identity and must be replaced by authenticated user UUID ownership.
 7. refresh_worker.py is a supervised Python worker, but deployment and invocation have not been wired into the public FieldShift product.
 8. AppEEARS already reuses pending/recent provider tasks using stable task names, pending cache files, and the account task list. That is useful, but Vercel ephemeral files are not a durable source of truth. Provider task IDs and source state must be persisted in the database.
@@ -305,7 +307,7 @@ Acceptance: run survives browser close, Vercel instance changes, and a new sign-
 Acceptance: one failed source does not restart successful sources; browser can close; worker can resume after termination; no duplicate provider tasks for the same source request.
 
 ### Phase 5 — Verified shared archive and scientific integration
-- Connect run_v3 weather retrieval to verified archive-first logic where location/time exactly match.
+- [Completed in runtime commit 5c3040c] Connect `run_v3` weather retrieval to verified archive-first logic for exact reference coordinates and complete annual date coverage.
 - Add archive support for approved satellite products with deterministic paths and byte-for-byte remote readback.
 - Fix GPM partial cache behaviour so partial cache entries are merged with newly available missing dates rather than returned as complete.
 - Persist exact QA policy version, native temporal cadence, source coverage and limitations.
