@@ -181,6 +181,12 @@ def _field_context(field: dict[str, Any] | None, demo: bool = False) -> dict[str
     lon = float(field.get("lon", 90.41))
     area = float(field.get("area_ha", 0.4))
     farmer = field.get("farmer") or {}
+    polygon_raw = field.get("polygon") or []
+    polygon = [
+        [float(point[0]), float(point[1])]
+        for point in polygon_raw
+        if isinstance(point, (list, tuple)) and len(point) == 2
+    ]
     return {
         "id": field.get("field_id", "mymensingh_demo_v3" if demo else f"field_{uuid.uuid4().hex[:8]}"),
         "location": {
@@ -198,6 +204,13 @@ def _field_context(field: dict[str, Any] | None, demo: bool = False) -> dict[str
             "irrigation_reliability": farmer.get("irrigation_reliability", 0.80),
             "budget_bdt_ha": farmer.get("budget_bdt_ha", 100000),
             "labour_available_person_days_ha": farmer.get("labour_available_person_days_ha", 120),
+        },
+        "polygon": polygon if len(polygon) >= 3 else None,
+        "spatial_support": {
+            "boundary_geometry": "user_drawn" if len(polygon) >= 3 else "not_supplied",
+            "satellite_sampling": "field_center_point",
+            "field_average_observed": False,
+            "note": "The submitted boundary is retained as farmer-provided geometry; current NASA point adapters sample the field centre and are not a polygon-wide field average.",
         },
         "data_state": "demo_snapshot" if demo else "analysis_input",
     }
