@@ -445,6 +445,35 @@ class TestV3Engine(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"invalid latitude/longitude"):
             invalid.validate()
 
+    def test_drive_only_first_worker_pass_keeps_smap_visible_as_pending(self):
+        from fieldshift.v3 import gee, pipeline
+        from fieldshift.v3.appeears import AppEEARSResult
+
+        with tempfile.TemporaryDirectory() as cache_dir, patch.dict(
+            os.environ,
+            {"FIELD_SHIFT_APPEEARS_USER": "test-user", "FIELD_SHIFT_APPEEARS_PASSWORD": "test-password"},
+        ), patch.object(pipeline, "gee_credentials_configured", return_value=False), patch.object(
+            pipeline.google_drive, "configured", return_value=True
+        ), patch.object(pipeline, "smap_daily_point_timeseries") as smap_cache, patch.object(
+            pipeline, "appeears_point_timeseries",
+            return_value=AppEEARSResult((), (
+                {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+                {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+            )),
+        ):
+            smap_cache.return_value=gee.SMAPPointResult(
+                rows=(),status="pending",coverage_fraction=0.0,
+                retrieval_mode="cache_miss",retry_after_seconds=900,
+            )
+            field=build_field(load_config(),DEFAULT_WEIGHTS)
+            datasets=[]
+            pipeline._load_optional_remote(
+                Path(cache_dir),datasets,field,date(2025,1,1),date(2025,1,31),
+                Path(cache_dir),allow_live=True,allow_live_smap=False,
+            )
+        smap=next(item for item in datasets if item.get("name")=="NASA SMAP")
+        self.assertEqual(smap["status"],"pending")
+
     def test_drive_archive_credentials_allow_smap_cache_but_never_live_gee_without_gee_auth(self):
         from fieldshift.v3 import gee, pipeline
         from fieldshift.v3.appeears import AppEEARSResult
