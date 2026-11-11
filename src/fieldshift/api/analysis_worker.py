@@ -16,6 +16,8 @@ import urllib.request
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from fieldshift.api import supabase_auth
+
 
 class WorkerAPIError(RuntimeError):
     """A safe, non-secret worker/Data API failure."""
@@ -254,7 +256,10 @@ def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict
         "p_result": {
             "result_kind": result_kind,
             "evidence_fingerprint": fingerprint,
-            "result_payload": {key: value for key, value in result_payload.items() if key != "_request_payload"},
+            "result_payload": supabase_auth.archive_result_payload(
+                {key: value for key, value in result_payload.items() if key != "_request_payload"},
+                storage_key=run_id,
+            ),
         },
         "p_retry_at": retry_at,
     }
