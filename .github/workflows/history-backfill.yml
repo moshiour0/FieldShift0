@@ -40,8 +40,8 @@ jobs:
           GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
           GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-          START_YEAR: ${{ github.event_name == 'workflow_dispatch' && inputs.start_year || 2016 }}
-          END_YEAR: ${{ github.event_name == 'workflow_dispatch' && inputs.end_year || 2025 }}
+          START_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.start_year || 2016 }}
+          END_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.end_year || 2025 }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF_NAME" != "main" && "$GITHUB_REF_NAME" != "feat/krishinexus-real-data-school-lab" ]]; then
@@ -103,8 +103,8 @@ jobs:
           GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           REGION: ${{ matrix.region }}
-          START_YEAR: ${{ github.event_name == 'workflow_dispatch' && inputs.start_year || 2016 }}
-          END_YEAR: ${{ github.event_name == 'workflow_dispatch' && inputs.end_year || 2025 }}
+          START_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.start_year || 2016 }}
+          END_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.end_year || 2025 }}
         run: |
           set -euo pipefail
           python scripts/prefetch_history.py --regions "$REGION" --start-year "$START_YEAR" --end-year "$END_YEAR" --pause 2
@@ -112,8 +112,8 @@ jobs:
         if: always()
         env:
           REGION: ${{ matrix.region }}
-          START_YEAR: ${{ github.event_name == 'workflow_dispatch' && inputs.start_year || 2016 }}
-          END_YEAR: ${{ github.event_name == 'workflow_dispatch' && inputs.end_year || 2025 }}
+          START_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.start_year || 2016 }}
+          END_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.end_year || 2025 }}
           JOB_STATUS: ${{ job.status }}
         run: |
           {
