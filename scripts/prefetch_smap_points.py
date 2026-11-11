@@ -53,7 +53,7 @@ def main() -> int:
         print(json.dumps({
             "region": args.region,
             "status": "failed",
-            "error": "FIELD_SHIFT_GEE_PROJECT / FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON are not configured",
+            "error": "Earth Engine is disabled until FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true and eligible noncommercial registration is verified",
             "requests_started": False,
         }), flush=True)
         return 2

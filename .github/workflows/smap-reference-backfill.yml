@@ -41,6 +41,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           FIELD_SHIFT_GEE_PROJECT: ${{ secrets.FIELD_SHIFT_GEE_PROJECT }}
           FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON }}
+          FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED: ${{ vars.FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED }}
           START_YEAR: ${{ inputs.start_year }}
           END_YEAR: ${{ inputs.end_year }}
         run: |
@@ -55,6 +56,10 @@ jobs:
           fi
           if [[ -z "$FIELD_SHIFT_GEE_PROJECT" || -z "$FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON" ]]; then
             echo "::error title=Earth Engine not configured::Add FIELD_SHIFT_GEE_PROJECT and FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON as repository Actions Secrets. No NASA request was started."
+            exit 1
+          fi
+          if [[ "$FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED" != "true" ]]; then
+            echo "::error title=Earth Engine billing safety gate::Do not run this workflow until the Cloud project is verified as eligible noncommercial use with no paid Earth Engine/Cloud services. After verifying, set repository Actions Variable FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true. No NASA request was started."
             exit 1
           fi
           current_year="$(date -u +%Y)"
@@ -107,6 +112,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           FIELD_SHIFT_GEE_PROJECT: ${{ secrets.FIELD_SHIFT_GEE_PROJECT }}
           FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON }}
+          FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED: ${{ vars.FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED }}
           REGION: ${{ matrix.region }}
           START_YEAR: ${{ inputs.start_year }}
           END_YEAR: ${{ inputs.end_year }}

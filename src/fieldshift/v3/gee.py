@@ -87,8 +87,20 @@ class SMAPPointResult:
 
 
 def gee_credentials_configured() -> bool:
+    """Require an explicit noncommercial-use opt-in before any Earth Engine call.
+
+    Earth Engine is free only for eligible, registered noncommercial/research
+    use. Credentials alone must never silently enable a potentially billable
+    Google Cloud service. Set FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true only
+    after confirming the project registration and that no paid Cloud services
+    or billing setup will be used for this workload.
+    """
+    noncommercial_confirmed = os.getenv(
+        "FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", ""
+    ).strip().lower() in {"1", "true", "yes"}
     return bool(
-        os.getenv("FIELD_SHIFT_GEE_PROJECT", "").strip()
+        noncommercial_confirmed
+        and os.getenv("FIELD_SHIFT_GEE_PROJECT", "").strip()
         and os.getenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "").strip()
     )
 

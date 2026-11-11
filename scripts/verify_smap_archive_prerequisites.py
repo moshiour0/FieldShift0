@@ -21,7 +21,7 @@ def verify() -> dict[str, object]:
     if not google_drive_configured():
         raise RuntimeError("Google Drive archive credentials are not configured.")
     if not gee_credentials_configured():
-        raise RuntimeError("Earth Engine project/service-account credentials are not configured.")
+        raise RuntimeError("Earth Engine is disabled until FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true and eligible noncommercial registration is verified.")
 
     drive = verify_storage()
     ee = _initialise_ee()

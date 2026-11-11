@@ -218,3 +218,19 @@ def test_corrupt_shared_appeears_cache_is_never_accepted(wire, monkeypatch, tmp_
     second = appeears.appeears_point_timeseries(24.7471, 90.4203, START, END, cache_dir=tmp_path / "second")
     assert all(item["status"] == "available" for item in second.datasets)
     assert any(item["retrieval_mode"] != "google_drive_cache" for item in second.datasets)
+
+
+def test_gee_requires_explicit_noncommercial_confirmation(monkeypatch):
+    monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", '{"type":"service_account"}')
+    monkeypatch.delenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", raising=False)
+    assert gee.gee_credentials_configured() is False
+
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "false")
+    assert gee.gee_credentials_configured() is False
+
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
+    assert gee.gee_credentials_configured() is True
+
+    monkeypatch.delenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON")
+    assert gee.gee_credentials_configured() is False
