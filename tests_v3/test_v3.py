@@ -445,6 +445,38 @@ class TestV3Engine(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"invalid latitude/longitude"):
             invalid.validate()
 
+    def test_drive_archive_credentials_do_not_route_smap_away_from_appeears(self):
+        from fieldshift.v3 import pipeline
+        from fieldshift.v3.appeears import AppEEARSResult
+
+        with tempfile.TemporaryDirectory() as cache_dir, patch.dict(
+            os.environ,
+            {"FIELD_SHIFT_APPEEARS_USER": "test-user", "FIELD_SHIFT_APPEEARS_PASSWORD": "test-password"},
+        ), patch.object(pipeline, "gee_credentials_configured", return_value=False), patch.object(
+            pipeline.google_drive, "configured", return_value=True
+        ), patch.object(pipeline, "smap_daily_point_timeseries") as gee_smap, patch.object(
+            pipeline,
+            "appeears_point_timeseries",
+            return_value=AppEEARSResult((), ({
+                "name": "NASA SMAP",
+                "source_type": "satellite",
+                "status": "available",
+                "coverage": "AppEEARS SMAP sample",
+            },)),
+        ) as appeears_sample:
+            field=build_field(load_config(),DEFAULT_WEIGHTS)
+            datasets=[]
+            pipeline._load_optional_remote(
+                Path(cache_dir),datasets,field,date(2025,1,1),date(2025,1,31),
+                Path(cache_dir),allow_live=True,allow_live_smap=True,
+            )
+
+        gee_smap.assert_not_called()
+        appeears_sample.assert_called_once()
+        self.assertIsNone(appeears_sample.call_args.kwargs.get("source_keys"))
+        smap=next(item for item in datasets if item.get("name")=="NASA SMAP")
+        self.assertEqual(smap["status"],"available")
+
     def test_full_engine_and_validation(self):
         run=run_v3(n_weight_samples=40,n_uncertainty_samples=16)
         self.assertEqual(run.engine_version,'3.0.0')
