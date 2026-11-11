@@ -214,6 +214,27 @@ class FieldV2:
             raise ValueError("invalid latitude/longitude")
         if self.area_ha <= 0:
             raise ValueError("area_ha must be positive")
+        if self.polygon is not None:
+            if not 3 <= len(self.polygon) <= 500:
+                raise ValueError("field polygon must contain between 3 and 500 vertices")
+            points: list[tuple[float, float]] = []
+            for point in self.polygon:
+                if not isinstance(point, (list, tuple)) or len(point) != 2:
+                    raise ValueError("each field polygon vertex must be a latitude/longitude pair")
+                lat, lon = float(point[0]), float(point[1])
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                    raise ValueError("field polygon contains invalid latitude/longitude")
+                points.append((lat, lon))
+            if len(set(points)) < 3:
+                raise ValueError("field polygon must contain at least 3 distinct vertices")
+            signed_area = sum(
+                points[i][1] * points[(i + 1) % len(points)][0]
+                - points[(i + 1) % len(points)][1] * points[i][0]
+                for i in range(len(points))
+            )
+            if abs(signed_area) < 1e-10:
+                raise ValueError("field polygon has zero area")
+            self.polygon = points
         self.farmer.validate()
 
 
