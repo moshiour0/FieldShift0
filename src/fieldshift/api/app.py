@@ -291,7 +291,8 @@ def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
             hydrated["result_payload"] = supabase_auth.restore_result_payload(hydrated.get("result_payload"))
             hydrated_results.append(hydrated)
     except supabase_auth.SupabaseAPIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code = 503 if exc.status_code == 503 else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return {
         "run": run_rows[0],
         "sources": sources if isinstance(sources, list) else [],
