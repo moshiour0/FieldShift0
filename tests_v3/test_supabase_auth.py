@@ -159,12 +159,14 @@ class TestSupabaseAuth(unittest.TestCase):
 
 
     def test_result_archive_requires_configured_private_google_drive(self) -> None:
-        with patch("fieldshift.v3.google_drive.configured", return_value=False):
-            with self.assertRaises(supabase_auth.SupabaseAPIError) as raised:
-                supabase_auth.archive_result_payload(
-                    {"run": {"id": "run-1"}},
-                    storage_key="c5db7057-0bfb-4b54-855b-6f4db53c2c7a",
-                )
+        with (
+            patch("fieldshift.v3.google_drive.configured", return_value=False),
+            self.assertRaises(supabase_auth.SupabaseAPIError) as raised,
+        ):
+            supabase_auth.archive_result_payload(
+                {"run": {"id": "run-1"}},
+                storage_key="c5db7057-0bfb-4b54-855b-6f4db53c2c7a",
+            )
         self.assertEqual(raised.exception.status_code, 503)
 
     def test_restore_result_payload_preserves_legacy_inline_result(self) -> None:
@@ -173,7 +175,6 @@ class TestSupabaseAuth(unittest.TestCase):
 
     def test_restore_result_payload_reads_and_verifies_google_drive_object(self) -> None:
         import hashlib
-
         import json
 
         payload = {"run": {"id": "run-1"}, "evidence": {"items": []}}
@@ -199,9 +200,11 @@ class TestSupabaseAuth(unittest.TestCase):
             "archive_sha256": "0" * 64,
             "archive_size_bytes": 5,
         }
-        with patch("fieldshift.v3.google_drive.get_object", return_value=b"false"):
-            with self.assertRaises(supabase_auth.SupabaseAPIError) as raised:
-                supabase_auth.restore_result_payload(reference)
+        with (
+            patch("fieldshift.v3.google_drive.get_object", return_value=b"false"),
+            self.assertRaises(supabase_auth.SupabaseAPIError) as raised,
+        ):
+            supabase_auth.restore_result_payload(reference)
         self.assertEqual(raised.exception.status_code, 502)
 
 
