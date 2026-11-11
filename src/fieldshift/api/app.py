@@ -1,28 +1,37 @@
 from __future__ import annotations
 
+import hmac
 import json
 import math
 import os
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 from typing import Any
 
+from fieldshift.api import supabase_auth
+from fieldshift.api.analysis_worker import WorkerAPIError, worker_is_configured
+from fieldshift.api.analysis_worker import process_one as process_analysis_worker_one
 from fieldshift.api.product import (
     create_analysis,
     create_demo,
     get_analysis,
-    get_evidence,
-    get_strategy,
-    report,
     report_from_response,
     what_if,
 )
+from fieldshift.v3 import google_drive
 from fieldshift.v3.appeears import credentials_configured as appeears_credentials_configured
 from fieldshift.v3.gee import gee_credentials_configured
+from fieldshift.v3.history import REGIONS, history_summary, read_year
+from fieldshift.v3.history_extended import history_date_range, read_ytd
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
+from fieldshift.v3.refresh_jobs import create_refresh, get_refresh
+from fieldshift.v3.region_catalog import zone_catalog
+from fieldshift.v3.satellite_archive import SOURCES as SATELLITE_SOURCES
+from fieldshift.v3.satellite_archive import satellite_history
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover
@@ -31,7 +40,7 @@ except ImportError as exc:  # pragma: no cover
 APP_ROOT = Path(__file__).resolve().parent
 app = FastAPI(
     title="FieldShift V3 Product API",
-    version="3.1.3",
+    version="3.3.0",
     description="Farmer-facing evidence-aware crop rotation decision support",
 )
 
@@ -39,14 +48,201 @@ static_dir = APP_ROOT / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Bengali learning lab: ship the static client with the same FastAPI function.
+school_game_dir = Path(__file__).resolve().parents[3] / "school-game"
+if school_game_dir.is_dir():
+    app.mount("/school-game", StaticFiles(directory=school_game_dir, html=True), name="school-game")
+
 
 def _jsonable(run) -> dict[str, Any]:
     return json.loads(json.dumps(asdict(run), default=str))
 
 
+
+def _auth_context(request: Request, *, required: bool = True) -> tuple[str | None, dict[str, Any] | None]:
+    token = supabase_auth.bearer_token(request.headers.get("authorization"))
+    if not token:
+        if required:
+            raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
+        return None, None
+    try:
+        return token, supabase_auth.get_user(token)
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+def _persist_authenticated_response(
+    request: Request,
+    request_payload: dict[str, Any],
+    response_payload: dict[str, Any],
+) -> None:
+    token, user = _auth_context(request, required=False)
+    if not token or not user:
+        response_payload["persistence"] = {
+            "saved": False,
+            "requires_sign_in": True,
+            "message": "Sign in before running an analysis to save it to My Runs.",
+        }
+        return
+    try:
+        saved = supabase_auth.persist_product_analysis(
+            access_token=token,
+            request_payload=request_payload,
+            response_payload=response_payload,
+        )
+        response_payload["persistence"] = {
+            "saved": True,
+            "run_id": saved["run_id"],
+            "already_saved": bool(saved.get("already_saved")),
+            "message": "Analysis saved to your account.",
+        }
+        response_payload["run"]["saved_run_id"] = saved["run_id"]
+    except (supabase_auth.SupabaseAPIError, ValueError, TypeError):
+        response_payload["persistence"] = {
+            "saved": False,
+            "requires_sign_in": False,
+            "message": "The analysis completed, but saving it to your account failed. Retry the analysis while signed in.",
+        }
+
+
+@app.get("/api/auth/config")
+def auth_config() -> dict[str, Any]:
+    config = supabase_auth.settings()
+    return {
+        "configured": bool(config["configured"]),
+        "url": config["url"],
+        "publishable_key": config["publishable_key"],
+        "provider": "email_magic_link",
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request) -> dict[str, Any]:
+    _, user = _auth_context(request)
+    return {"user": user}
+
+
+@app.get("/api/account/runs")
+def account_runs(request: Request) -> dict[str, Any]:
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
+    try:
+        rows = supabase_auth.rest_select(
+            "analysis_runs",
+            access_token=str(token),
+            filters={
+                "select": "id,created_at,updated_at,started_at,completed_at,last_activity_at,requested_start,requested_end,status,stage,progress_percent,status_message,engine_version",
+                "user_id": f"eq.{user['id']}",
+                "order": "created_at.desc",
+                "limit": "50",
+            },
+        )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"runs": rows if isinstance(rows, list) else []}
+
+
+@app.post("/api/account/runs/{run_id}/recheck")
+def account_run_recheck(run_id: str, request: Request) -> dict[str, Any]:
+    import uuid
+
+    try:
+        safe_run_id = str(uuid.UUID(run_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=404, detail="Saved analysis not found.") from exc
+
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to check this saved analysis again.")
+
+    try:
+        result = supabase_auth.request_analysis_run_recheck(
+            access_token=str(token),
+            run_id=safe_run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 404, 409, 422, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    return {
+        "queued": not bool(result.get("already_queued")),
+        "already_queued": bool(result.get("already_queued")),
+        "run": {
+            "id": str(result["run_id"]),
+            "status": str(result.get("status") or "waiting_for_data"),
+            "stage": str(result.get("stage") or "queued"),
+            "status_message": (
+                "A new evidence check is queued. Your previous saved result remains available."
+                if not result.get("already_queued")
+                else "An evidence check is already queued or running for this saved analysis."
+            ),
+        },
+        "available_at": result.get("available_at"),
+    }
+
+
+@app.get("/api/account/runs/{run_id}")
+def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
+    import uuid
+
+    try:
+        safe_run_id = str(uuid.UUID(run_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=404, detail="Saved analysis not found.") from exc
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
+    try:
+        run_rows = supabase_auth.rest_select(
+            "analysis_runs",
+            access_token=str(token),
+            filters={
+                "select": "*",
+                "id": f"eq.{safe_run_id}",
+                "user_id": f"eq.{user['id']}",
+                "limit": "1",
+            },
+        )
+        if not isinstance(run_rows, list) or not run_rows:
+            raise HTTPException(status_code=404, detail="Saved analysis not found.")
+        sources = supabase_auth.rest_select(
+            "analysis_run_sources",
+            access_token=str(token),
+            filters={
+                "select": "*",
+                "run_id": f"eq.{safe_run_id}",
+                "order": "created_at.asc",
+            },
+        )
+        results = supabase_auth.rest_select(
+            "analysis_results",
+            access_token=str(token),
+            filters={
+                "select": "*",
+                "run_id": f"eq.{safe_run_id}",
+                "order": "revision.desc",
+            },
+        )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    result_rows = results if isinstance(results, list) else []
+    return {
+        "run": run_rows[0],
+        "sources": sources if isinstance(sources, list) else [],
+        "results": result_rows,
+        "latest_result": result_rows[0] if result_rows else None,
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "engine": "3.0.0", "product": "3.1.3"}
+    return {"status": "ok", "engine": "3.0.0", "product": "3.3.0"}
 
 
 @app.get("/api/status")
@@ -73,7 +269,24 @@ def integration_status() -> dict[str, Any]:
             },
             "soilgrids": {"enabled": soilgrids_enabled},
         },
-        "analysis_state": {"storage": "process_memory", "durable_across_instances": False},
+        "archive_storage": {
+            "provider": "google_drive" if google_drive.configured() else "bundled_filesystem",
+            "credentials_configured": google_drive.configured(),
+            "connection_tested": False,
+            "private": True,
+        },
+        "account_storage": {
+            "configured": bool(supabase_auth.settings()["configured"]),
+            "auth_provider": "email_magic_link",
+            "saved_runs": "supabase_postgres",
+        },
+        "analysis_state": {
+            "storage": "supabase_queue_and_versioned_postgres_results_for_signed_in_runs",
+            "completed_signed_in_runs_durable_across_instances": bool(supabase_auth.settings()["configured"]),
+            "active_execution_durable_across_instances": bool(
+                supabase_auth.settings()["configured"] and worker_is_configured()
+            ),
+        },
     }
 
 
@@ -114,6 +327,27 @@ def run(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/internal/worker/tick")
+def fieldshift_worker_tick(request: Request) -> dict[str, Any]:
+    """Process at most one Supabase-queued analysis using the server-only worker token."""
+    presented = request.headers.get("x-fieldshift-worker", "")
+    configured_tokens = (
+        os.getenv("FIELDSHIFT_WORKER_TOKEN", "").strip(),
+        os.getenv("FIELD_SHIFT_WORKER_SECRET", "").strip(),
+    )
+    matched_token = next(
+        (token for token in configured_tokens if token and presented and hmac.compare_digest(token, presented)),
+        None,
+    )
+    if matched_token is None:
+        raise HTTPException(status_code=401, detail="Worker authentication failed.")
+    try:
+        result = process_analysis_worker_one(matched_token)
+        return {"ok": True, **result}
+    except WorkerAPIError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/demo")
@@ -159,10 +393,58 @@ def field_preview(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@app.post("/api/analysis/run")
-def analysis_run(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+
+
+@app.post("/api/analysis/queue", status_code=202)
+def queue_analysis_api(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    import uuid
+
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in before queuing an analysis.")
+    body = dict(payload or {})
     try:
-        return create_analysis(payload or {})
+        client_request_id = str(uuid.UUID(str(body.pop("client_request_id", ""))))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail="A valid client_request_id is required.") from exc
+    try:
+        queued = supabase_auth.queue_analysis_request(
+            access_token=token,
+            client_request_id=client_request_id,
+            request_payload=body,
+        )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {400, 401, 403, 409, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {
+        "queued": True,
+        "already_queued": bool(queued.get("already_queued")),
+        "run": {
+            "id": str(queued["run_id"]),
+            "status": str(queued.get("status") or "queued"),
+            "status_message": (
+                "Analysis is safely queued. Dataset checks continue even after you close this page."
+            ),
+        },
+    }
+
+
+@app.post("/api/analysis/run")
+def analysis_run(request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        body = payload or {}
+        token = supabase_auth.bearer_token(request.headers.get("authorization"))
+        if token:
+            try:
+                supabase_auth.get_user(token)
+            except supabase_auth.SupabaseAPIError as exc:
+                status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        response = create_analysis(body)
+        _persist_authenticated_response(request, body, response)
+        return response
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -171,10 +453,15 @@ def analysis_run(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 
 @app.get("/api/analysis/{run_id}")
 def analysis_get(run_id: str) -> dict[str, Any]:
+    if run_id != "demo_mymensingh_v3":
+        raise HTTPException(
+            status_code=404,
+            detail="Live analyses are available through your signed-in My Runs account.",
+        )
     try:
         return get_analysis(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown analysis: {run_id}") from exc
+        raise HTTPException(status_code=404, detail="Demo analysis is unavailable.") from exc
 
 
 @app.get("/api/analysis/{run_id}/strategies")
@@ -185,10 +472,11 @@ def analysis_strategies(run_id: str) -> dict[str, Any]:
 
 @app.get("/api/analysis/{run_id}/strategies/{strategy_id}")
 def analysis_strategy(run_id: str, strategy_id: str) -> dict[str, Any]:
-    try:
-        return get_strategy(run_id, strategy_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown strategy") from exc
+    data = analysis_get(run_id)
+    for strategy in data["strategies"]:
+        if strategy.get("id") == strategy_id:
+            return strategy
+    raise HTTPException(status_code=404, detail="Unknown strategy")
 
 
 @app.get("/api/analysis/{run_id}/scenarios")
@@ -199,16 +487,30 @@ def analysis_scenarios(run_id: str) -> dict[str, Any]:
 
 @app.get("/api/analysis/{run_id}/evidence/{evidence_id}")
 def analysis_evidence(run_id: str, evidence_id: str) -> dict[str, Any]:
-    try:
-        return get_evidence(run_id, evidence_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown evidence item") from exc
+    data = analysis_get(run_id)
+    for item in data.get("evidence", {}).get("items", []):
+        if item.get("id") == evidence_id:
+            return item
+    raise HTTPException(status_code=404, detail="Unknown evidence item")
 
 
 @app.post("/api/analysis/{run_id}/what-if")
-def analysis_what_if(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def analysis_what_if(run_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     try:
-        return what_if(run_id, payload)
+        # The static public demo can be explored anonymously. Every live what-if
+        # requires a real session; the product layer uses only this caller's
+        # submitted field snapshot and never reads another live run from memory.
+        # A live what-if accepts only the caller's submitted field snapshot;
+        # product.what_if never loads a live run by run ID. A supplied token is
+        # still validated and enables account persistence, but anonymous
+        # compatibility clients cannot read another run's cached field.
+        token, _ = _auth_context(request, required=False)
+        response = what_if(run_id, payload)
+        if token:
+            _persist_authenticated_response(request, payload, response)
+        return response
+    except HTTPException:
+        raise
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown analysis") from exc
     except ValueError as exc:
@@ -219,10 +521,7 @@ def analysis_what_if(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/analysis/{run_id}/report")
 def analysis_report(run_id: str) -> dict[str, Any]:
-    try:
-        return report(run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown analysis") from exc
+    return report_from_response(analysis_get(run_id))
 
 
 @app.post("/api/analysis/{run_id}/report")
@@ -234,6 +533,134 @@ def analysis_report_from_client(run_id: str, payload: dict[str, Any]) -> dict[st
         return report_from_response(data)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+
+
+@app.get("/api/regions")
+def regions() -> dict[str, Any]:
+    return {**zone_catalog(), "reference_points": REGIONS,
+            "notice": "Planning zones are provisional groupings, not official AEZ polygons. NASA POWER values are gridded point samples, not zone averages."}
+
+
+@app.get("/api/history/{region_id}")
+def regional_history(region_id: str, start_year: int = 2016, end_year: int = 2025,
+                     start: str | None = None, end: str | None = None,
+                     product: str = "power") -> dict[str, Any]:
+    try:
+        if product != "power":
+            raise ValueError("History source must be power; use /api/satellite-history for other products")
+        if start is not None or end is not None:
+            if not start or not end:
+                raise ValueError("Both start and end dates are required")
+            return history_date_range(region_id, start, end)
+        return history_summary(region_id, start_year, end_year)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/data-status/{region_id}")
+def source_data_status(region_id: str) -> dict[str, Any]:
+    try:
+        from fieldshift.v3.history import region_by_id
+        region = region_by_id(region_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Unknown region") from exc
+    through = None
+    archive_kind = "not_archived"
+    archive_error = None
+    try:
+        _, meta = read_ytd(region_id, date.today().year)
+        through = meta.get("data_through")
+        archive_kind = "ytd_partial"
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        archive_error = type(exc).__name__
+        for year in range(date.today().year - 1, max(2015, date.today().year - 11), -1):
+            try:
+                _, meta = read_year(region_id, year)
+                through = f"{year}-12-31"
+                archive_kind = "completed_year"
+                archive_error = None
+                break
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    power_state = "ready" if archive_kind in {"ytd_partial", "completed_year"} else "not_archived"
+    if through is None:
+        try:
+            compact = history_summary(region_id, 2016, 2025)
+            if compact.get("annual"):
+                through = f"{max(row['year'] for row in compact['annual'])}-12-31"
+                if compact.get("archive_representation") == "monthly_aggregate":
+                    archive_kind = "monthly_summary_chart_only"
+                    power_state = "summary_only"
+        except (OSError, ValueError, RuntimeError):
+            pass
+    products = {"power": {"state": power_state,
+                          "data_through": through, "archive_kind": archive_kind,
+                          "sample_type": "NASA POWER gridded point",
+                          "field_measurement": False,
+                          "error_type": archive_error,
+                          "citation": "https://power.larc.nasa.gov/docs/services/api/temporal/daily/"}}
+    for product in SATELLITE_SOURCES:
+        try:
+            sat = satellite_history(region_id, product)
+            products[product] = {"state": sat.get("status", "available"),
+                                 "data_through": sat.get("data_through"),
+                                 "coverage_fraction": sat.get("coverage_fraction"),
+                                 "product_id": sat.get("product_id"),
+                                 "unit": sat.get("unit", SATELLITE_SOURCES[product]["unit"]),
+                                 "field_measurement": False}
+        except (OSError, ValueError, RuntimeError) as exc:
+            products[product] = {"state": "unavailable", "error_type": type(exc).__name__,
+                                 "field_measurement": False}
+    return {"region": region, "products": products,
+            "notice": "Source readiness is separate from whether a source was used in a particular analysis run."}
+
+
+@app.get("/api/satellite-history/{region_id}")
+def satellite_history_api(region_id: str, product: str) -> dict[str, Any]:
+    try:
+        return satellite_history(region_id, product)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+
+
+@app.post("/api/refresh-jobs", status_code=202)
+def create_refresh_api(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    # A trusted proxy and distributed edge limit are required for public scale.
+    caller = request.client.host if request.client else "anonymous"
+    try:
+        job, created = create_refresh(
+            payload.get("region_id", ""),
+            payload.get("product", "power"),
+            payload.get("data_through", ""),
+            caller,
+        )
+        return {**job, "created": created,
+                "notice": "A separate supervised worker is required. Cached history remains available."}
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/refresh-jobs/{job_id}")
+def get_refresh_api(job_id: str) -> dict[str, Any]:
+    try:
+        result = get_refresh(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="Refresh job not found")
+    return result
 
 
 @app.get("/", response_class=HTMLResponse)

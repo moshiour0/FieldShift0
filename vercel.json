@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "includeFiles": "{config/**,data/v3/**,src/fieldshift/api/static/**}",
+      "includeFiles": "{config/**,data/v3/**,data/history/**,data/satellite/**,src/fieldshift/api/static/**,school-game/**}",
       "maxDuration": 300
     }
   }

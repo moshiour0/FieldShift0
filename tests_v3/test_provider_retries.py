@@ -119,11 +119,18 @@ def test_requests_are_paced_across_products(wire, monkeypatch):
 
 
 def test_retry_details_survive_the_website_response():
-    item = _evidence_state([{"name": "NASA SMAP", "status": "retrying", "http_status": 429,
-                             "request_stage": "task-list", "retry_after_seconds": 120}], 0)["items"][0]
+    item = _evidence_state([{
+        "name": "NASA SMAP",
+        "status": "retrying",
+        "http_status": 429,
+        "request_stage": "task-list",
+        "retry_after_seconds": 120,
+        "provider_task_id": "appeears-task-123",
+    }], 0)["items"][0]
     assert item["retry_after_seconds"] == 120
     assert item["http_status"] == 429
     assert item["request_stage"] == "task-list"
+    assert item["provider_task_id"] == "appeears-task-123"
 
 
 def test_nex_timeout_resumes_only_missing_month_at_iowa_coordinate(monkeypatch, tmp_path):
@@ -151,3 +158,79 @@ def test_nex_missing_bands_remain_unavailable(monkeypatch, tmp_path):
     with patch.object(gee, "_fetch_monthly_normals", side_effect=ValueError("missing usable bands")):
         result = gee.nex_gddp_monthly_deltas(41.4594, -93.0862, "ssp245", tmp_path)
     assert result.status == "unavailable" and result.retry_after_seconds is None
+
+
+def test_completed_appeears_point_results_are_verified_in_drive_and_reused(wire, monkeypatch, tmp_path):
+    service, _, calls, _ = wire
+    objects: dict[str, bytes] = {}
+
+    monkeypatch.setattr(appeears.google_drive, "configured", lambda: True)
+
+    def get_object(key: str):
+        return objects.get(key)
+
+    def put_object(key: str, content: bytes, *, sha256: str | None = None, mime_type: str = "application/json"):
+        import hashlib
+        assert sha256 == hashlib.sha256(content).hexdigest()
+        objects[key] = content
+        return {"id": key}
+
+    monkeypatch.setattr(appeears.google_drive, "get_object", get_object)
+    monkeypatch.setattr(appeears.google_drive, "put_object", put_object)
+
+    first = appeears.appeears_point_timeseries(24.7471, 90.4203, START, END, cache_dir=tmp_path / "first")
+    assert {item["status"] for item in first.datasets} == {"available"}
+    assert len(objects) == 3
+    assert all(item["archive_cache_status"] == "verified" for item in first.datasets)
+    assert all(item["archive_sha256"] for item in first.datasets)
+
+    task_posts_before = calls.count(("task", "POST"))
+    bundle_downloads_before = sum(path.startswith("bundle/") and path.count("/") == 2 for path, _ in calls)
+
+    # A cold worker with an empty local filesystem must reuse the shared archive.
+    second = appeears.appeears_point_timeseries(24.7471, 90.4203, START, END, cache_dir=tmp_path / "second")
+    assert {item["status"] for item in second.datasets} == {"available"}
+    assert all(item["retrieval_mode"] == "google_drive_cache" for item in second.datasets)
+    assert all(item["archive_cache_status"] == "verified" for item in second.datasets)
+    assert calls.count(("task", "POST")) == task_posts_before
+    assert sum(path.startswith("bundle/") and path.count("/") == 2 for path, _ in calls) == bundle_downloads_before
+    assert len(service.payloads) == 3
+
+
+def test_corrupt_shared_appeears_cache_is_never_accepted(wire, monkeypatch, tmp_path):
+    objects: dict[str, bytes] = {}
+    monkeypatch.setattr(appeears.google_drive, "configured", lambda: True)
+    monkeypatch.setattr(appeears.google_drive, "get_object", lambda key: objects.get(key))
+    monkeypatch.setattr(
+        appeears.google_drive,
+        "put_object",
+        lambda key, content, **kwargs: objects.__setitem__(key, content) or {"id": key},
+    )
+
+    first = appeears.appeears_point_timeseries(24.7471, 90.4203, START, END, cache_dir=tmp_path / "first")
+    assert {item["status"] for item in first.datasets} == {"available"}
+    key = next(iter(objects))
+    envelope = json.loads(objects[key].decode("utf-8"))
+    envelope["payload_sha256"] = "0" * 64
+    objects[key] = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    # The bad shared object is a cache miss, never a false successful hit.
+    second = appeears.appeears_point_timeseries(24.7471, 90.4203, START, END, cache_dir=tmp_path / "second")
+    assert all(item["status"] == "available" for item in second.datasets)
+    assert any(item["retrieval_mode"] != "google_drive_cache" for item in second.datasets)
+
+
+def test_gee_requires_explicit_noncommercial_confirmation(monkeypatch):
+    monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", '{"type":"service_account"}')
+    monkeypatch.delenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", raising=False)
+    assert gee.gee_credentials_configured() is False
+
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "false")
+    assert gee.gee_credentials_configured() is False
+
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
+    assert gee.gee_credentials_configured() is True
+
+    monkeypatch.delenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON")
+    assert gee.gee_credentials_configured() is False

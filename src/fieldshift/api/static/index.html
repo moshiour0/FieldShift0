@@ -41,13 +41,16 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 @media(max-width:1100px){.hero-grid,.workspace,.priority-layout,.explain-grid,.evidence-grid,.report{grid-template-columns:1fr}.strategy-grid{grid-template-columns:repeat(2,1fr)}.hero-visual{min-height:360px}.metrics{grid-template-columns:repeat(2,1fr)}.trust{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:720px){.container{width:min(100% - 20px,var(--max))}.topbar-inner{height:64px}.top-actions .ghost{display:none}.hero{padding:48px 0 28px}.hero h1{font-size:46px}.hero p{font-size:17px}.hero-visual{min-height:310px;border-radius:22px}.trust{grid-template-columns:1fr 1fr}.section{padding-bottom:52px}.section-head{align-items:flex-start;flex-direction:column}.section-head h2{font-size:28px}.metrics{grid-template-columns:1fr 1fr}.priority-grid{grid-template-columns:1fr}.strategy-grid{grid-template-columns:1fr}.form-row,.form-row.soil-texture{grid-template-columns:1fr}.map-card,.map-card #workspace-map{min-height:390px;height:390px}.scenario-row{grid-template-columns:106px 1fr 58px}.scenario-row span{font-size:10px}.drawer-panel{width:100%;max-height:91vh;border-radius:25px 25px 0 0}.footer-grid{grid-template-columns:1fr}.hero-actions .primary,.hero-actions .secondary{flex:1}.topbar .brand small{display:none}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+@media(max-width:720px){.topbar-inner .brand{flex-shrink:0}.top-actions{max-width:58vw;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}.top-actions::-webkit-scrollbar{display:none}.top-actions .secondary{padding:7px 8px;font-size:10px;white-space:nowrap}}
+
+.account-panel{display:grid;gap:14px}.account-panel .field input{width:100%}.account-runs{display:grid;gap:9px}.account-run{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:#fffef9;border:1px solid var(--line);border-radius:14px;padding:12px}.account-run strong{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.04em}.account-run span,.account-run small{display:block;color:var(--muted);font-size:11px;line-height:1.45;margin-top:4px}.account-run small{font-size:11px}.account-run button{padding:8px 11px}
 </style>
 </head>
 <body>
 <div class="app" id="app">
 <header class="topbar"><div class="container topbar-inner">
   <a class="brand" href="#top"><span class="logo" aria-hidden="true">⌁</span><span><strong>FieldShift</strong><small>NASA-informed field decisions</small></span></a>
-  <nav class="top-actions" aria-label="Primary"><button class="ghost" onclick="scrollToId('methodology')">How it works</button><button class="secondary" onclick="startDemo()">Load demo field</button></nav>
+  <nav class="top-actions" aria-label="Primary"><button class="ghost" onclick="scrollToId('methodology')">How it works</button><a class="secondary" href="/static/history.html" style="text-decoration:none">Regional evidence</a><a class="secondary" href="/school-game/" style="text-decoration:none">কৃষি শেখার ল্যাব</a><button class="secondary" onclick="startDemo()">Load demo field</button><button class="secondary" id="account-button" onclick="openAccount()">Sign in</button></nav>
 </div></header>
 <main id="top">
 <section class="hero"><div class="container hero-grid">
@@ -93,6 +96,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 </div></section>
 
 <section class="section" id="evidence-section"><div class="container">
+  <div id="run-readiness" class="state-card hidden" role="status" style="margin-bottom:12px"><div><strong id="run-readiness-title">Run status</strong><p id="run-readiness-message" class="small">Checking evidence readiness.</p></div></div>
   <div id="pending-evidence" class="state-card hidden" role="status" style="margin-bottom:16px"><div><strong>NASA data checks are continuing</strong><p id="pending-message" class="small">Available results are shown while pending sources are checked.</p><div class="section-tools"><button class="secondary" id="refresh-evidence" onclick="refreshPendingEvidence()">Check now</button><button class="ghost" id="stop-refresh" onclick="stopEvidenceRefresh()">Stop automatic checks</button></div></div></div>
   <p id="evidence-window" class="small muted"></p>
   <div class="section-head"><div><span class="eyebrow">02 · Field evidence</span><h2>See the field context before the ranking.</h2><p>Evidence state comes first; modeled signals below are explicitly tied to the leading baseline strategy, not presented as raw observations.</p></div><div id="qualityBadge" class="badge warn">Evidence state: awaiting analysis</div></div>
@@ -139,7 +143,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 <div class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0};
+const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,currentQueuedRunId:null,workerPollTimer:null,workerPollAttempts:0,workerRecheckAvailable:false,auth:{config:null,session:null,user:null,loading:true}};
 const qs=s=>document.querySelector(s); const qsa=s=>Array.from(document.querySelectorAll(s));
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>`${Math.round(Math.max(0,Math.min(1,Number(v)||0))*100)}%`;
@@ -150,6 +154,246 @@ const days=v=>Number.isFinite(Number(v))?`${num(v,1)} days/ha`:'—';
 function scrollToId(id){document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'})}
 function toast(message){const t=qs('#toast');t.textContent=message;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400)}
 function setStep(active){const order=['field','evidence','priorities','strategies','climate','decision'];order.forEach(x=>qs('#step-'+x)?.classList.toggle('active',x===active));}
+
+const AUTH_SESSION_KEY='fieldshift.auth.session';
+function newClientRequestId(){
+  if(window.crypto?.randomUUID)return window.crypto.randomUUID();
+  const bytes=new Uint8Array(16);window.crypto.getRandomValues(bytes);
+  bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+  const hex=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+function storeAuthSession(session){
+  const expiresIn=Number(session.expires_in)||3600;
+  state.auth.session={
+    access_token:session.access_token,
+    refresh_token:session.refresh_token,
+    expires_at:Date.now()+expiresIn*1000
+  };
+  localStorage.setItem(AUTH_SESSION_KEY,JSON.stringify(state.auth.session));
+}
+function clearAuthSession(){
+  state.auth.session=null;state.auth.user=null;
+  localStorage.removeItem(AUTH_SESSION_KEY);
+  renderAccountButton();
+}
+async function authProviderRequest(path,options={}){
+  const config=state.auth.config;
+  if(!config?.configured)throw Error('Account sign-in is not configured for this deployment.');
+  const response=await fetch(`${config.url}/auth/v1/${path}`,{
+    ...options,
+    headers:{apikey:config.publishable_key,'Content-Type':'application/json',...(options.headers||{})}
+  });
+  const raw=await response.text();let data={};
+  try{data=raw?JSON.parse(raw):{}}catch{data={message:raw}}
+  if(!response.ok)throw Error(data.msg||data.message||data.error_description||'Supabase Auth request failed.');
+  return data;
+}
+async function getAuthToken(){
+  const session=state.auth.session;
+  if(!session?.access_token)return null;
+  if(Number(session.expires_at||0)>Date.now()+60000)return session.access_token;
+  if(!session.refresh_token){clearAuthSession();return null}
+  try{
+    const refreshed=await authProviderRequest('token?grant_type=refresh_token',{
+      method:'POST',body:JSON.stringify({refresh_token:session.refresh_token})
+    });
+    storeAuthSession(refreshed);
+    return state.auth.session.access_token;
+  }catch(e){clearAuthSession();throw e}
+}
+async function accountApi(path,options={}){
+  const token=await getAuthToken();
+  if(!token)throw Error('Sign in to access My Runs.');
+  const response=await fetch(path,{
+    ...options,
+    headers:{...(options.headers||{}),Authorization:`Bearer ${token}`,'Content-Type':'application/json'}
+  });
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw Error(data.detail||'Could not load your account data.');
+  return data;
+}
+function hideResultPanelsUntilReady(){
+  state.data=null;qs('#snapshotMetrics').innerHTML='';qs('#evidenceList').innerHTML='';
+  for(const id of ['priority-section','strategy-section','climate-section','decision-section'])qs('#'+id)?.classList.add('hidden');
+}
+function showQueuedRun(run,message){
+  const safeRun=run||{};
+  state.workerRecheckAvailable=false;
+  renderRunReadiness({run:{status:safeRun.status||'queued',status_message:message||safeRun.status_message||'Your saved analysis is waiting for the background worker.'}});
+  qs('#pending-evidence').classList.remove('hidden');
+  qs('#pending-message').textContent=message||safeRun.status_message||'Queued safely. You can close this page; the server will continue checking datasets.';
+  qs('#refresh-evidence').classList.add('hidden');qs('#stop-refresh').classList.add('hidden');
+}
+function showWorkerPending(detail){
+  const run=detail.run||{};const sources=detail.sources||[];
+  const pending=sources.filter(s=>['queued','pending','retrying','partial'].includes(String(s.status||'').toLowerCase()));
+  const names=pending.map(s=>s.source_name).filter(Boolean);
+  const message=run.stage==='retry_exhausted'
+    ? 'Automatic checks reached their retry limit. This run remains saved as WAITING FOR DATA; you can request another background check.'
+    : names.length ? 'Background checks continue for: '+names.join(', ')+'. You may close this page.'
+    : run.status_message||'Background processing continues. You may close this page.';
+  const canRecheck = Boolean(run.id && state.auth.user && (
+    run.stage==='retry_exhausted' || ['failed','final_with_gaps'].includes(run.status)
+  ));
+  state.workerRecheckAvailable=canRecheck;
+  if(canRecheck){
+    qs('#pending-evidence').classList.add('hidden');
+    qs('#refresh-evidence').classList.remove('hidden');
+    qs('#refresh-evidence').disabled=false;
+    qs('#refresh-evidence').textContent='Check again';
+    qs('#stop-refresh').classList.add('hidden');
+  }else if(['failed','cancelled'].includes(run.status)||Boolean(run.completed_at)){
+    qs('#pending-evidence').classList.add('hidden');
+    qs('#refresh-evidence').classList.add('hidden');
+    qs('#stop-refresh').classList.add('hidden');
+  }else{
+    qs('#pending-evidence').classList.remove('hidden');qs('#pending-message').textContent=message;
+    qs('#refresh-evidence').classList.add('hidden');qs('#stop-refresh').classList.add('hidden');
+  }
+}
+async function pollQueuedRun(runId,version,attempt){
+  if(version!==state.pollVersion||state.currentQueuedRunId!==runId||!state.auth.user)return;
+  if(attempt>=120){qs('#pending-message').textContent='This run is still saved and its background schedule continues. Reopen My Runs later for the latest result.';return;}
+  try{
+    const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
+    if(version!==state.pollVersion||state.currentQueuedRunId!==runId)return;
+    const run=detail.run||{};
+    if(detail.latest_result&&detail.latest_result.result_payload){
+      const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
+      data.run.saved_run_id=run.id;data.run.status=run.status;data.run.status_message=run.status_message||data.run.status_message;
+      data.run.is_final=['final_ready','final_with_gaps'].includes(run.status);
+      applyData(data);showWorkerPending(detail);
+    }else{showQueuedRun(run);}
+    const terminal=run.stage==='retry_exhausted'||['failed','cancelled'].includes(run.status)||Boolean(run.completed_at);
+    if(terminal){showWorkerPending(detail);return;}
+    state.workerPollAttempts=attempt+1;
+    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),15000);
+  }catch(e){
+    qs('#pending-message').textContent='Could not refresh the run status just now. The saved background job is unaffected; My Runs can reload it later.';
+    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),30000);
+  }
+}
+
+function renderAccountButton(){
+  const button=qs('#account-button');if(!button)return;
+  button.textContent=state.auth.user?'My Runs':'Sign in';
+  button.title=state.auth.user?(`Signed in as ${state.auth.user.email||'account'}`):'Sign in and save your analyses';
+}
+async function initAccount(){
+  state.auth.loading=true;
+  let returnedFromEmailLink=false;
+  try{
+    const configResponse=await fetch('/api/auth/config');
+    state.auth.config=await configResponse.json();
+    const fragment=new URLSearchParams(window.location.hash.replace(/^#/,''));
+    const accessToken=fragment.get('access_token');
+    const authError=fragment.get('error_description')||fragment.get('error_code');
+    if(authError){toast(authError);history.replaceState(null,document.title,window.location.pathname+window.location.search);}
+    if(accessToken){
+      returnedFromEmailLink=true;
+      storeAuthSession({
+        access_token:accessToken,
+        refresh_token:fragment.get('refresh_token'),
+        expires_in:fragment.get('expires_in')||3600
+      });
+      history.replaceState(null,document.title,window.location.pathname+window.location.search);
+    }else{
+      try{state.auth.session=JSON.parse(localStorage.getItem(AUTH_SESSION_KEY)||'null')}catch{state.auth.session=null}
+    }
+    if(state.auth.session?.access_token){
+      try{
+        const data=await accountApi('/api/auth/me');
+        state.auth.user=data.user;
+        if(returnedFromEmailLink)toast('Email verified. You are signed in and My Runs is ready.');
+      }catch(e){
+        clearAuthSession();
+        if(returnedFromEmailLink)toast('The email link returned, but this app could not verify the session. Check the Supabase redirect settings and request a new link.');
+      }
+    }else if(returnedFromEmailLink){
+      toast('The email link returned without a usable session. Please request a new link.');
+    }
+  }catch(e){state.auth.config={configured:false};console.warn('Account setup unavailable:',e.message)}
+  finally{state.auth.loading=false;renderAccountButton()}
+}
+async function sendAccountMagicLink(event){
+  event.preventDefault();
+  const email=qs('#account-email')?.value?.trim();
+  const note=qs('#account-message');
+  if(!email){note.textContent='Enter a valid email address.';return}
+  try{
+    const redirectTo=window.location.origin+window.location.pathname;
+    const query='otp?redirect_to='+encodeURIComponent(redirectTo);
+    await authProviderRequest(query,{method:'POST',body:JSON.stringify({email,create_user:true})});
+    note.textContent='Sign-in link requested. Check your email. The Preview URL must be in Supabase Auth → URL Configuration redirect allowlist.';
+  }catch(e){
+    note.textContent=e.message+' Check the allowed redirect URLs and email delivery settings.';
+  }
+}
+async function signOutAccount(){
+  try{
+    const token=await getAuthToken();
+    if(token)await authProviderRequest('logout',{method:'POST',headers:{Authorization:`Bearer ${token}`}});
+  }catch(e){console.warn('Remote sign-out was not confirmed:',e.message)}
+  clearAuthSession();closeDrawer();toast('Signed out');
+}
+async function loadAccountRuns(){
+  const target=qs('#account-runs');if(!target)return;
+  target.textContent='Loading saved analyses…';
+  try{
+    const data=await accountApi('/api/account/runs');
+    const runs=data.runs||[];
+    target.innerHTML=runs.length?runs.map(run=>`
+      <div class="account-run">
+        <div><strong>${esc(run.status||'unknown').replaceAll('_',' ')}</strong><span>${esc(run.requested_start||'')} — ${esc(run.requested_end||'')}</span><small>${esc(run.status_message||'Saved analysis')}</small></div>
+        <button class="secondary" onclick="loadSavedRun('${esc(run.id)}')">Open</button>
+      </div>`).join(''):'<p class="small muted">No saved analyses yet. Run an analysis while signed in and it will appear here.</p>';
+  }catch(e){target.textContent=e.message}
+}
+async function loadSavedRun(runId){
+  try{
+    stopEvidenceRefresh();state.pendingAttempts=0;const version=state.pollVersion;
+    const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
+    state.lastPayload={...(detail.run.request_payload||{}),client_request_id:detail.run.client_request_id};
+    state.clientRequestId=detail.run.client_request_id;state.currentQueuedRunId=runId;
+    closeDrawer();scrollToId('evidence-section');
+    if(detail.latest_result&&detail.latest_result.result_payload){
+      const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
+      data.run.saved_run_id=detail.run.id;data.run.status=detail.run.status;data.run.status_message=detail.run.status_message||data.run.status_message;
+      data.run.is_final=['final_ready','final_with_gaps'].includes(detail.run.status);
+      applyData(data);showWorkerPending(detail);
+    }else{hideResultPanelsUntilReady();showQueuedRun(detail.run);}
+    if(detail.run.stage!=='retry_exhausted'&&!['failed','cancelled'].includes(detail.run.status)&&!detail.run.completed_at){
+      pollQueuedRun(runId,version,0);
+    }
+    toast('Saved analysis restored from your account');
+  }catch(e){toast(e.message)}
+}
+function openAccount(){
+  if(!state.auth.config?.configured){
+    openDrawer('My FieldShift account','Account storage is not configured',`<p class="small">This Preview cannot reach the Supabase account configuration. Check the Preview environment variables and redeploy.</p>`);
+    return;
+  }
+  if(state.auth.user){
+    openDrawer('My Runs',`Signed in as ${esc(state.auth.user.email||'')}`,`
+      <div class="account-panel">
+        <div class="state-card"><div><strong>Saved analyses</strong><span>Runs are attached to your Supabase user account and remain available after closing this page.</span></div></div>
+        <div id="account-runs" class="account-runs">Loading saved analyses…</div>
+        <button class="ghost" onclick="signOutAccount()">Sign out</button>
+      </div>`);
+    loadAccountRuns();
+  }else{
+    openDrawer('Sign in to FieldShift','Save your analysis history and reopen it later',`
+      <div class="account-panel">
+        <form onsubmit="sendAccountMagicLink(event)">
+          <div class="field"><label for="account-email">Email address</label><input id="account-email" type="email" autocomplete="email" required placeholder="you@example.com"></div>
+          <button class="primary" type="submit" style="margin-top:12px;width:100%">Email me a sign-in link</button>
+        </form>
+        <p id="account-message" class="small" role="status">We use passwordless email sign-in. Your runs are private to your account.</p>
+        <div class="state-card"><div><strong>Email delivery note</strong><span>Supabase's default email sender is limited to organization members. For public sign-ups, a custom SMTP provider must be configured. The Preview host must also be added to Auth redirect URLs.</span></div></div>
+      </div>`);
+  }
+}
 function initMaps(){
   if(typeof L==='undefined') return;
   state.heroMap=L.map('hero-map',{zoomControl:false,attributionControl:false,scrollWheelZoom:false,dragging:false,doubleClickZoom:false,boxZoom:false,touchZoom:false}).setView([24.75,90.41],11);
@@ -205,8 +449,10 @@ function setDatePreset(){
   qs('#start-date').value=start;qs('#end-date').value=end;qs('#date-error').textContent='';
 }
 function stopEvidenceRefresh(){
-  clearTimeout(state.pendingTimer);state.pendingTimer=null;state.pollVersion++;
-  if(!qs('#pending-evidence').classList.contains('hidden'))qs('#pending-message').textContent='Automatic checks stopped. Check again to resume the existing NASA tasks.';
+  clearTimeout(state.pendingTimer);state.pendingTimer=null;
+  clearTimeout(state.workerPollTimer);state.workerPollTimer=null;
+  state.currentQueuedRunId=null;state.workerPollAttempts=0;state.workerRecheckAvailable=false;state.pollVersion++;
+  if(!qs('#pending-evidence').classList.contains('hidden'))qs('#pending-message').textContent='Browser checks stopped. Any accepted background run continues on the server.';
 }
 function scheduleEvidenceRefresh(data,version){
   if(version!==state.pollVersion)return;
@@ -226,29 +472,67 @@ function scheduleEvidenceRefresh(data,version){
 async function submitAnalysis(payload,isRefresh=false){
   if(state.analysisBusy)return;
   state.analysisBusy=true;const version=state.pollVersion;
-  showBusy(isRefresh?'Checking pending NASA datasets…':'Running evidence + simulation…');
+  showBusy(isRefresh?'Checking pending NASA datasets…':'Saving analysis request…');
   qs('#refresh-evidence').disabled=true;
   try{
-    const r=await fetch('/api/analysis/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const raw=await r.text();let d;
-    try{d=JSON.parse(raw)}catch{throw Error(`Server returned HTTP ${r.status}. If this was a timeout, check again to resume NASA tasks.`)}
+    const headers={'Content-Type':'application/json'};const accessToken=await getAuthToken();
+    if(accessToken&&!isRefresh){
+      headers.Authorization='Bearer '+accessToken;
+      const queued=await fetch('/api/analysis/queue',{method:'POST',headers,body:JSON.stringify(payload)});
+      const queuedData=await queued.json().catch(()=>({}));
+      if(!queued.ok)throw Error(queuedData.detail||'Could not queue this analysis.');
+      if(version!==state.pollVersion)return;
+      state.currentQueuedRunId=queuedData.run.id;state.workerPollAttempts=0;
+      hideResultPanelsUntilReady();
+      qs('#evidence-window').textContent='Requested observations: '+payload.start_date+' to '+payload.end_date+'. The run is stored in My Runs.';
+      showQueuedRun(queuedData.run,'Analysis request saved. A server-side worker will check NASA datasets and update this run automatically—even if you close this page.');
+      scrollToId('evidence-section');toast('Analysis safely queued. Background processing started.');
+      pollQueuedRun(state.currentQueuedRunId,version,0);return;
+    }
+    if(accessToken)headers.Authorization='Bearer '+accessToken;
+    const r=await fetch('/api/analysis/run',{method:'POST',headers,body:JSON.stringify(payload)});
+    const raw=await r.text();let d;try{d=JSON.parse(raw)}catch{throw Error('Server returned HTTP '+r.status+'. If this was a timeout, check again to resume NASA tasks.')}
     if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:'Analysis failed');
     if(version!==state.pollVersion)return;
     applyData(d);scheduleEvidenceRefresh(d,version);
-    if(!isRefresh){scrollToId('evidence-section');toast(d.run.status==='pending'?'Analysis ready; some NASA data is still processing':'Analysis complete')}
-  }catch(e){toast(e.message);if(isRefresh)qs('#pending-message').textContent=`${e.message} Use Check now to try again.`}
+    if(!isRefresh){scrollToId('evidence-section');if(d.persistence&&d.persistence.saved)toast('Analysis saved to My Runs');else toast(d.run.status==='preliminary_ready'?'Preliminary result only; review data readiness':d.run.status==='final_with_gaps'?'Result ready with data gaps; review source coverage':'Analysis complete');}
+  }catch(e){toast(e.message);if(isRefresh)qs('#pending-message').textContent=e.message+' Use Check now to try again.'}
   finally{state.analysisBusy=false;qs('#refresh-evidence').disabled=Date.now()<state.retryNotBefore;clearBusy()}
 }
 async function runAnalysis(){
   if(state.analysisBusy)return;
   try{
-    const payload={field:fieldPayload(),...dateRangePayload(),priority_choices:selectedPriorities(),n_uncertainty_samples:24,n_weight_samples:80};
+    state.clientRequestId=newClientRequestId();
+    const payload={client_request_id:state.clientRequestId,field:fieldPayload(),...dateRangePayload(),priority_choices:selectedPriorities(),n_uncertainty_samples:24,n_weight_samples:80};
     stopEvidenceRefresh();state.pendingAttempts=0;state.lastPayload=payload;setStep('field');
     await submitAnalysis(payload);
   }catch(e){toast(e.message)}
 }
 async function refreshPendingEvidence(){
-  if(!state.lastPayload||state.analysisBusy)return;
+  if(state.analysisBusy)return;
+  if(state.workerRecheckAvailable && state.currentQueuedRunId){
+    state.analysisBusy=true;
+    showBusy('Re-queueing saved evidence check…');
+    qs('#refresh-evidence').disabled=true;
+    try{
+      const runId=state.currentQueuedRunId;
+      const result=await accountApi('/api/account/runs/'+encodeURIComponent(runId)+'/recheck',{method:'POST'});
+      state.workerRecheckAvailable=false;
+      state.workerPollAttempts=0;
+      showQueuedRun(result.run,result.run.status_message);
+      scrollToId('evidence-section');
+      toast(result.already_queued?'Evidence check is already queued':'Saved analysis queued for another evidence check');
+      pollQueuedRun(runId,state.pollVersion,0);
+    }catch(e){
+      toast(e.message);
+      qs('#refresh-evidence').disabled=false;
+      qs('#refresh-evidence').textContent='Check again';
+    }finally{
+      state.analysisBusy=false;clearBusy();
+    }
+    return;
+  }
+  if(!state.lastPayload)return;
   const remaining=Math.ceil((state.retryNotBefore-Date.now())/1000);
   if(remaining>0){toast(`Please wait ${remaining} seconds before checking NASA again.`);return}
   clearTimeout(state.pendingTimer);state.pendingAttempts++;
@@ -263,18 +547,42 @@ async function runWhatIf(scenario){
   const version=state.pollVersion;
   toast('Running what-if scenario…');
   try{
-    const r=await fetch(`/api/analysis/${state.data.run.id}/what-if`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,priorities:state.data.priorities,field:state.data.field,evidence_window:state.data.run.evidence_window})});
+    const requestBody={client_request_id:newClientRequestId(),scenario,priorities:state.data.priorities,field:state.data.field,evidence_window:state.data.run.evidence_window};
+    const headers={'Content-Type':'application/json'};
+    const accessToken=await getAuthToken();if(accessToken)headers.Authorization=`Bearer ${accessToken}`;
+    const r=await fetch(`/api/analysis/${state.data.run.id}/what-if`,{method:'POST',headers,body:JSON.stringify(requestBody)});
     const d=await r.json();if(!r.ok)throw Error(d.detail||'What-if failed');
     if(version!==state.pollVersion)return;
     const f=d.field,window=d.run.evidence_window||{};
-    state.lastPayload={field:{field_id:f.id,lat:f.location.lat,lon:f.location.lon,area_ha:f.area_ha,land_type:f.land_type,previous_crop:f.previous_crop,soil:f.soil_inputs,soil_data_source:f.soil_data_source,farmer:f.constraints},priorities:d.priorities,start_date:window.start_date,end_date:window.end_date,n_weight_samples:100,n_uncertainty_samples:32};
-    applyData(d);scheduleEvidenceRefresh(d,version);scrollToId('decision-section');toast('What-if comparison complete');
+    state.clientRequestId=requestBody.client_request_id;
+    state.lastPayload={client_request_id:requestBody.client_request_id,field:{field_id:f.id,lat:f.location.lat,lon:f.location.lon,area_ha:f.area_ha,land_type:f.land_type,previous_crop:f.previous_crop,soil:f.soil_inputs,soil_data_source:f.soil_data_source,farmer:f.constraints},priorities:d.priorities,start_date:window.start_date,end_date:window.end_date,n_weight_samples:100,n_uncertainty_samples:32};
+    applyData(d);scheduleEvidenceRefresh(d,version);scrollToId('decision-section');
+    toast(d.persistence?.saved?'What-if result saved to My Runs':'What-if comparison complete');
   }catch(e){toast(e.message)}finally{state.analysisBusy=false}
 }
 
 function showBusy(text){qs('#qualityBadge').textContent=text;qs('#qualityBadge').className='badge warn'}
 function clearBusy(){if(state.data)renderQuality()}
-function applyData(data){state.data=data;const window=data.run.evidence_window;qs('#evidence-window').textContent=window?.start_date?`Requested observations: ${window.start_date} to ${window.end_date} (inclusive). Crop plan: ${window.plan_start_year}–${window.plan_end_year}.`:'Demo snapshot — choose a date range and Run analysis for a new request.';state.activeScenario='baseline';renderQuality();renderSnapshot();renderEvidence();renderPrioritySummary();renderStrategies();renderScenarios();renderExplanation();renderReport();setStep('strategies');setTimeout(()=>setStep('strategies'),0);}
+function applyData(data){state.data=data;for(const id of ['priority-section','strategy-section','climate-section','decision-section'])qs('#'+id)?.classList.remove('hidden');renderRunReadiness(data);const window=data.run.evidence_window;qs('#evidence-window').textContent=window?.start_date?`Requested observations: ${window.start_date} to ${window.end_date} (inclusive). Crop plan: ${window.plan_start_year}–${window.plan_end_year}.`:'Demo snapshot — choose a date range and Run analysis for a new request.';state.activeScenario='baseline';renderQuality();renderSnapshot();renderEvidence();renderPrioritySummary();renderStrategies();renderScenarios();renderExplanation();renderReport();setStep('strategies');setTimeout(()=>setStep('strategies'),0);}
+function renderRunReadiness(data){
+  const run=data?.run||{},box=qs('#run-readiness');
+  if(!box)return;
+  const labels={
+    queued:['ANALYSIS QUEUED','Your analysis request is saved. A background worker will process it even when this page is closed.'],
+    running:['ANALYSIS RUNNING','The background worker is processing your saved request.'],
+    preliminary_ready:['PRELIMINARY RESULT','Some data are still processing or the required core weather input is not ready. This result is not final.'],
+    waiting_for_data:['WAITING FOR DATA','A required dataset is not ready. No final prediction should be used yet.'],
+    final_with_gaps:['FINAL RESULT · DATA GAPS','The core weather input is ready, but one or more supplemental sources are incomplete or unavailable. Review the evidence list.'],
+    final_ready:['FINAL RESULT · VERIFIED INPUTS','Required core evidence and configured/requested sources passed their readiness checks.']
+  };
+  const diagnosticOnly=run.status==='preliminary_ready'&&run.prediction_eligible===false;
+  const copy=diagnosticOnly
+    ? ['DIAGNOSTIC PREVIEW · NOT FOR FIELD DECISIONS','Required observed-weather evidence is not ready. Do not use these rankings as a field recommendation.']
+    : (labels[run.status]||['RUN STATUS',run.status_message||'The run status is being evaluated.']);
+  qs('#run-readiness-title').textContent=copy[0];
+  qs('#run-readiness-message').textContent=run.status_message||copy[1];
+  box.classList.remove('hidden');
+}
 function renderQuality(){const q=state.data?.data_quality||{};const label=q.level==='high'?'Strong evidence':q.level==='moderate'?'Mixed evidence':'Limited evidence';qs('#qualityBadge').textContent=`${label} · ${Math.round((q.coverage_fraction||0)*100)}% supplemental satellite coverage`;qs('#qualityBadge').className=`badge ${q.level==='limited'?'off':q.level==='moderate'?'warn':''}`}
 function metricCard(cls,title,value,unit,copy,progress){return `<div class="metric-card ${cls||''}"><div class="kicker">${title}</div><div class="metric-main"><div class="metric-value">${esc(value)}</div>${unit?`<div class="metric-unit">${esc(unit)}</div>`:''}</div>${Number.isFinite(progress)?`<div class="progress"><i style="width:${Math.round(Math.max(0,Math.min(1,progress))*100)}%"></i></div>`:''}<p>${esc(copy)}</p></div>`}
 function renderSnapshot(){const s=state.data.field_snapshot||{};qs('#snapshotMetrics').innerHTML=metricCard('water','Water pressure',pct(s.water_pressure?.value??0.5),'pressure','Modeled water pressure for the leading baseline strategy.',1-(s.water_pressure?.value??0.5))+metricCard('soil','Soil resilience',pct(s.soil_resilience?.value??0.5),'signal','Modeled soil-resilience signal for the leading baseline strategy.',s.soil_resilience?.value??0)+metricCard('heat','Heat resilience',pct(s.heat_resilience?.value??0.5),'signal','Modeled heat-resilience signal for the leading baseline strategy.',s.heat_resilience?.value??0)+metricCard('','Baseline yield',num(s.yield_kg_ha,0),'kg/ha','Climate-adjusted modeled yield for the leading baseline strategy.',Math.min(1,(s.yield_kg_ha||0)/7000))}
@@ -298,7 +606,7 @@ function downloadReport(){if(!state.data){toast('Run an analysis first');return}
 function printReport(){if(!state.data){toast('Run an analysis first');return}window.print()}
 function applyPrintStyles(){const st=document.createElement('style');st.textContent='@media print{.topbar,.hero-actions,.hero-note,.hero-visual,.trust-strip,.stepper,.section-tools,.map-card,.priority-layout,.footer,.drawer,.toast{display:none!important}.section{padding:15px 0}.surface,.metric-card{box-shadow:none!important}.container{width:100%}body{background:#fff}.report{grid-template-columns:1fr}.report-hero{break-inside:avoid}}';document.head.appendChild(st)}
 function showFallbackMap(){if(typeof L==='undefined'){qsa('.hero-visual,.map-card').forEach(el=>el.style.background='linear-gradient(135deg,#dce7de,#d4dfd6)');}}
-window.addEventListener('DOMContentLoaded',()=>{for(const id of ['start-date','end-date']){qs(`#${id}`).max=new Date().toISOString().slice(0,10);qs(`#${id}`).addEventListener('input',()=>{qs('#date-preset').value='custom';stopEvidenceRefresh();try{dateRangePayload()}catch{}})}qs('#date-preset').addEventListener('change',()=>{stopEvidenceRefresh();setDatePreset()});setDatePreset();initMaps();updateRangeLabels();for(const id of ['soil-ph','soil-soc','soil-sand','soil-silt','soil-clay','soil-source','lat','lon'])qs(`#${id}`).addEventListener('input',()=>{try{updateSoilState()}catch(e){qs('#soilState').textContent=e.message}});updateSoilState();renderPrioritySummary();applyPrintStyles();showFallbackMap();if('serviceWorker' in navigator)navigator.serviceWorker.register('/static/sw.js').catch(()=>{});startDemo();});
+window.addEventListener('DOMContentLoaded',async()=>{for(const id of ['start-date','end-date']){qs(`#${id}`).max=new Date().toISOString().slice(0,10);qs(`#${id}`).addEventListener('input',()=>{qs('#date-preset').value='custom';stopEvidenceRefresh();try{dateRangePayload()}catch{}})}qs('#date-preset').addEventListener('change',()=>{stopEvidenceRefresh();setDatePreset()});setDatePreset();initMaps();updateRangeLabels();for(const id of ['soil-ph','soil-soc','soil-sand','soil-silt','soil-clay','soil-source','lat','lon'])qs(`#${id}`).addEventListener('input',()=>{try{updateSoilState()}catch(e){qs('#soilState').textContent=e.message}});updateSoilState();renderPrioritySummary();applyPrintStyles();showFallbackMap();if('serviceWorker' in navigator)navigator.serviceWorker.register('/static/sw.js').catch(()=>{});await initAccount();startDemo();});
 </script>
 </body>
 </html>

@@ -1,0 +1,168 @@
+"""Partial-year and date-window history. Monthly aggregates are chart-only."""
+from __future__ import annotations
+
+import calendar
+import hashlib
+import json
+import os
+from dataclasses import asdict
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any
+
+from . import google_drive
+from .history import _monthly_archive_year, archive_dir, read_year, region_by_id, validate_days
+from .models import Provenance, WeatherDay
+from .nasa import _cache_write, power_daily
+
+POWER_CITATION="https://power.larc.nasa.gov/docs/services/api/temporal/daily/"
+
+def _digest(rows:list[dict])->str:
+    return hashlib.sha256(json.dumps(rows,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
+def _ytd_path(region_id:str,year:int)->Path:
+    region_by_id(region_id)
+    if year < 2016 or year > date.today().year: raise ValueError("YTD year outside supported range")
+    return archive_dir()/region_id/f"{year}-ytd.json"
+
+def read_ytd(region_id:str,year:int)->tuple[tuple[WeatherDay,...],dict]:
+    path=_ytd_path(region_id,year)
+    payload=None
+    if google_drive.configured():
+        try:
+            archived=google_drive.get_object(f"power-history/{region_id}/{year}-ytd.json")
+        except google_drive.GoogleDriveError as exc:
+            raise RuntimeError("Google Drive YTD archive unavailable") from exc
+        if archived is not None:
+            try:
+                payload=json.loads(archived.decode("utf-8"))
+            except (UnicodeDecodeError,json.JSONDecodeError) as exc:
+                raise ValueError("Google Drive YTD object is not valid JSON") from exc
+    if payload is None:
+        payload=json.loads(path.read_text(encoding="utf-8"))
+    through=date.fromisoformat(payload["data_through"])
+    rows=payload.get("days",[])
+    if payload.get("schema_version")!=2 or payload.get("region")!=region_by_id(region_id) or payload.get("year")!=year or payload.get("is_partial") is not True or through.year!=year or through>date.today() or _digest(rows)!=payload.get("sha256"):
+        raise ValueError("Partial archive metadata or checksum mismatch")
+    days=tuple(WeatherDay(**{**row,"d":date.fromisoformat(row["d"]),"provenance":Provenance(**row["provenance"])}) for row in rows)
+    validate_days(days,date(year,1,1),through)
+    return days,{k:v for k,v in payload.items() if k!="days"}
+
+def prefetch_ytd(region_id:str,through:date,*,refresh:bool=False,progress=None)->dict:
+    if through.year!=date.today().year or through<date(through.year,1,1) or through>=date.today():
+        raise ValueError("Select a past date in the current year; provider latency applies")
+    path=_ytd_path(region_id,through.year)
+    if not refresh:
+        try:
+            archive_key=f"power-history/{region_id}/{through.year}-ytd.json"
+            if google_drive.configured():
+                remote=google_drive.get_object(archive_key)
+                if remote is not None:
+                    _,meta=read_ytd(region_id,through.year)
+                    if date.fromisoformat(meta["data_through"])>=through:
+                        return {**meta,"retrieval_mode":"google_drive"}
+            if path.exists():
+                _,meta=read_ytd(region_id,through.year)
+                if date.fromisoformat(meta["data_through"])>=through:
+                    if google_drive.configured():
+                        google_drive.put_object(archive_key,path.read_bytes())
+                        _,remote_meta=read_ytd(region_id,through.year)
+                        if remote_meta["sha256"]!=meta["sha256"]:
+                            raise RuntimeError("Migrated Google Drive YTD archive checksum verification failed")
+                        return {**remote_meta,"retrieval_mode":"local_archive_published"}
+                    return {**meta,"retrieval_mode":"local_archive"}
+        except (OSError,ValueError,KeyError,TypeError): pass
+    region=region_by_id(region_id); start=date(through.year,1,1)
+    if progress: progress("fetching")
+    days=power_daily(region["lat"],region["lon"],start,through,timeout=20,retries=2,cache_dir=archive_dir()/"raw")
+    if progress: progress("qa")
+    validate_days(days,start,through)
+    rows=json.loads(json.dumps([asdict(d) for d in days],default=str))
+    payload={"schema_version":2,"region":region,"year":through.year,"is_partial":True,"source":"NASA POWER Daily","product_id":"POWER daily meteorology","native_resolution":"NASA POWER gridded point, daily","data_through":through.isoformat(),"retrieved_at":datetime.now(UTC).isoformat(),"quality_status":"qa_passed_with_imputation" if any("imputed" in d.source for d in days) else "qa_passed","coverage_fraction":1.0,"fallback_used":any("imputed" in d.source for d in days),"archive_kind":"point_not_zone","citation":POWER_CITATION,"sha256":_digest(rows),"days":rows}
+    if os.getenv("VERCEL") and not google_drive.configured():
+        raise RuntimeError("YTD archive publishing requires Google Drive storage configuration")
+    if progress: progress("publishing")
+    _cache_write(path,payload)
+    if google_drive.configured():
+        try:
+            archive_bytes=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode("utf-8")
+            google_drive.put_object(
+                f"power-history/{region_id}/{through.year}-ytd.json",
+                archive_bytes,
+            )
+        except Exception as exc:
+            raise RuntimeError("Persistent Google Drive YTD archive publishing failed") from exc
+    _,verified=read_ytd(region_id,through.year)
+    if verified.get("sha256") != payload["sha256"]:
+        raise RuntimeError("Google Drive YTD archive checksum verification failed")
+    return verified
+
+def _day(value:str|date)->date:
+    try:return value if isinstance(value,date) else date.fromisoformat(value)
+    except (ValueError,TypeError) as exc: raise ValueError("Dates must use YYYY-MM-DD") from exc
+
+def history_date_range(region_id:str,start:str|date,end:str|date)->dict[str,Any]:
+    region=region_by_id(region_id); a,b=_day(start),_day(end)
+    if a<date(1981,1,1) or b>date.today() or b<a or (b-a).days>30*366: raise ValueError("Date range must be ordered, not future, and <= 30 years")
+    monthly: list[dict[str, Any]] = []
+    annual: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    missing: list[int] = []
+    grouped: dict[tuple[int, int], list[WeatherDay | dict[str, Any]]] = {}
+    aggregate_years=set(); available=0
+    for year in range(a.year,b.year+1):
+        try:
+            if year==date.today().year: days,meta=read_ytd(region_id,year)
+            else: days,meta=read_year(region_id,year)
+        except (OSError,ValueError,KeyError,TypeError):
+            compact=_monthly_archive_year(region_id,year) if year<date.today().year else None
+            if compact is None: missing.append(year); continue
+            records,meta=compact; aggregate_years.add(year); evidence.append(meta)
+            for item in records:
+                yy,mm=map(int,item["month"].split("-")); ms=date(yy,mm,1); me=date(yy,mm,calendar.monthrange(yy,mm)[1])
+                if a<=ms and me<=b: grouped.setdefault((yy,mm),[]).append({**item,"aggregate_only":True}); available+=int(item["days"])
+            continue
+        evidence.append(meta)
+        for d in days:
+            if a<=d.d<=b: grouped.setdefault((d.d.year,d.d.month),[]).append(d); available+=1
+    for year in range(a.year,b.year+1):
+        yrows=[v for (yr,_),rows in grouped.items() if yr==year for v in rows]
+        if not yrows: continue
+        ystart=max(a,date(year,1,1)); yend=min(b,date(year,12,31))
+        if year==date.today().year:yend=min(yend,date.today())
+        expected=(yend-ystart).days+1
+        if year in aggregate_years:
+            aggregate_rows = [v for v in yrows if isinstance(v, dict)]
+            if len(aggregate_rows) != len(yrows):
+                raise ValueError("Monthly archive contains mixed record types")
+            n = sum(int(v["days"]) for v in aggregate_rows)
+            rain = sum(float(v["rain_mm"]) for v in aggregate_rows)
+            temp = sum(float(v["temperature_c"]) * int(v["days"]) for v in aggregate_rows) / max(1, n)
+        else:
+            daily_rows = [v for v in yrows if isinstance(v, WeatherDay)]
+            if len(daily_rows) != len(yrows):
+                raise ValueError("Daily archive contains non-daily records")
+            n = len(daily_rows)
+            rain = sum(v.rain_mm for v in daily_rows)
+            temp = sum((v.tmax_c + v.tmin_c) / 2 for v in daily_rows) / max(1, n)
+        annual.append({"year":year,"rain_mm":round(rain,2),"temperature_c":round(temp,2),"days":n,"expected_days":expected,"is_partial":n!=expected or ystart!=date(year,1,1) or yend!=date(year,12,31),"archive_representation":"monthly_aggregate" if year in aggregate_years else "daily"})
+    for (year,month),rows in sorted(grouped.items()):
+        if year in aggregate_years:
+            aggregate_rows = [value for value in rows if isinstance(value, dict)]
+            if not aggregate_rows or len(aggregate_rows) != len(rows):
+                raise ValueError("Monthly archive contains a non-aggregate record")
+            value = aggregate_rows[0]
+            days_value = value.get("days")
+            if not isinstance(days_value, int) or isinstance(days_value, bool):
+                raise ValueError("Monthly archive day count must be an integer")
+            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(float(value["rain_mm"]),2),"temperature_c":round(float(value["temperature_c"]),2),"days":days_value,"expected_days":calendar.monthrange(year,month)[1],"is_partial":False,"archive_representation":"monthly_aggregate"})
+        else:
+            daily_rows = [v for v in rows if isinstance(v, WeatherDay)]
+            if len(daily_rows) != len(rows):
+                raise ValueError("Daily archive contains non-daily records")
+            monthly.append({"month":f"{year}-{month:02d}","rain_mm":round(sum(v.rain_mm for v in daily_rows),2),"temperature_c":round(sum((v.tmax_c+v.tmin_c)/2 for v in daily_rows)/len(daily_rows),2),"days":len(daily_rows),"expected_days":calendar.monthrange(year,month)[1],"is_partial":len(daily_rows)!=calendar.monthrange(year,month)[1],"archive_representation":"daily"})
+    total=(b-a).days+1
+    monthly_days = sum(int(row["days"]) for row in monthly if row.get("archive_representation") == "monthly_aggregate")
+    has_monthly = bool(aggregate_years)
+    representation = "monthly_aggregate" if has_monthly and not any(row.get("archive_representation") == "daily" for row in monthly) else "mixed_daily_and_monthly" if has_monthly else "daily"
+    return {"region":region,"start_date":a.isoformat(),"end_date":b.isoformat(),"start_year":a.year,"end_year":b.year,"product":"power","sample_type":"monthly_aggregate" if has_monthly else "single_gridded_point","archive_representation":representation,"status":"summary_only" if has_monthly and not missing else "complete" if available==total else "partial" if available else "not_downloaded","is_partial":available!=total or any(x["is_partial"] for x in annual),"coverage_fraction":None if has_monthly else round(available/total,5),"summary_day_equivalent":monthly_days if has_monthly else None,"summary_coverage_fraction":round(monthly_days/total,5) if has_monthly else None,"available_days":None if has_monthly else available,"expected_days":total,"missing_years":missing,"annual":annual,"monthly":monthly,"provenance":evidence,"units":{"rain_mm":"mm total for displayed window","temperature_c":"°C; mean of daily (Tmax + Tmin)/2"},"note":"NASA POWER grid point sample, not a farm measurement or zone average. Missing dates are not zero. Monthly aggregates are chart-only, not observed daily coverage or daily crop-model inputs; partial months are not prorated.","supplemental_history":{"smap":"not_archived","modis_et":"not_archived","hls":"not_archived","gpm":"not_archived"}}

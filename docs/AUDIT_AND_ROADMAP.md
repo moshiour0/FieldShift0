@@ -1,3 +1,5 @@
+> **Historical audit snapshot — 6 October 2026.** This document records the earlier cleaned-archive state, before the V3.3 Supabase Auth, owner-scoped My Runs and durable analysis queue were completed on the current feature branch. Its statement that analysis is process-local is no longer true for the `feat/krishinexus-real-data-school-lab` Preview. It remains relevant to the older Production deployment, which is still on product 3.1.3 / `process_memory` and is not released with the V3.3 feature. For current repository, Preview, Supabase, data-archive and Production status, use [Final Owner Handoff — 11 November 2026](v3/FINAL_HANDOFF_2026-11-11.md).
+
 # KrishiNexus / FieldShift readiness audit
 
 Audit date: 2026-10-06  

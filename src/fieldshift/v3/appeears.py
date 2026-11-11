@@ -26,6 +26,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
+from . import google_drive
 from .diagnostics import safe_error
 from .models import Provenance, RemoteDay
 from .provenance import now_iso
@@ -571,6 +572,126 @@ def _read_cache(path: Path, ttl: int) -> tuple[tuple[RemoteDay, ...] | None, flo
     except (OSError, ValueError, TypeError, KeyError):
         return None, None, {}
 
+def _cache_identity(
+    source_key: str,
+    lat: float,
+    lon: float,
+    requested_start: date,
+    requested_end: date,
+    effective_start: date,
+    effective_end: date,
+    selections: tuple[LayerSelection, ...],
+) -> dict[str, Any]:
+    """Describe every dimension that makes a completed point result reusable."""
+    return {
+        "source_key": source_key,
+        "coordinate": {"latitude": round(lat, 5), "longitude": round(lon, 5), "precision_decimal_degrees": 5},
+        "requested_dates": {"start": requested_start.isoformat(), "end": requested_end.isoformat()},
+        "effective_dates": {"start": effective_start.isoformat(), "end": effective_end.isoformat()},
+        "products": [
+            {
+                "product": item.product,
+                "layer": item.layer,
+                "target": item.target,
+                "resolution": item.resolution,
+                "temporal_resolution": item.temporal_resolution,
+            }
+            for item in sorted(selections, key=lambda value: (value.product, value.layer, value.target))
+        ],
+        "schema_version": 1,
+        "qa_processing_version": "fieldshift-appeears-qa-v1",
+    }
+
+
+def _shared_cache_key(identity: dict[str, Any]) -> str:
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _remote_rows(rows: Any) -> tuple[RemoteDay, ...]:
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Shared satellite cache contains no observations")
+    output: list[RemoteDay] = []
+    for raw in rows:
+        if not isinstance(raw, dict) or not isinstance(raw.get("d"), str):
+            raise TypeError("Shared satellite cache contains an invalid observation")
+        row = dict(raw)
+        row["d"] = date.fromisoformat(row["d"])
+        if row.get("provenance"):
+            row["provenance"] = Provenance(**row["provenance"])
+        output.append(RemoteDay(**row))
+    return tuple(output)
+
+
+def _read_shared_cache(
+    object_key: str,
+    expected_key: str,
+    identity: dict[str, Any],
+    requested_start: date,
+    requested_end: date,
+) -> tuple[tuple[RemoteDay, ...], dict[str, Any], str] | None:
+    """Read a private Drive object only after identity and SHA-256 validation."""
+    raw = google_drive.get_object(object_key)
+    if raw is None:
+        return None
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+        if not isinstance(envelope, dict) or envelope.get("schema_version") != 1:
+            return None
+        if envelope.get("cache_key") != expected_key or envelope.get("identity") != identity:
+            return None
+        payload = envelope.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        digest = hashlib.sha256(canonical).hexdigest()
+        if digest != envelope.get("payload_sha256"):
+            return None
+        remote = _remote_rows(payload.get("remote"))
+        if any(day.d < requested_start or day.d > requested_end for day in remote):
+            return None
+        statuses = payload.get("dataset_statuses")
+        if not isinstance(statuses, dict):
+            return None
+        return remote, statuses, digest
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, KeyError):
+        return None
+
+
+def _publish_shared_cache(
+    object_key: str,
+    cache_key: str,
+    identity: dict[str, Any],
+    remote: tuple[RemoteDay, ...],
+    dataset_status: dict[str, Any],
+) -> str:
+    """Publish a completed, QA-checked result and require byte-for-byte read-back."""
+    payload = {
+        "remote": [{**asdict(row), "d": row.d.isoformat()} for row in remote],
+        "dataset_statuses": {str(dataset_status.get("name") or identity["source_key"]): dataset_status},
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    envelope = {
+        "schema_version": 1,
+        "cache_key": cache_key,
+        "identity": identity,
+        "payload_sha256": digest,
+        "payload": payload,
+    }
+    raw = json.dumps(envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    google_drive.put_object(object_key, raw, sha256=hashlib.sha256(raw).hexdigest())
+    readback = google_drive.get_object(object_key)
+    if readback is None or readback != raw:
+        raise google_drive.GoogleDriveError("Satellite cache remote read-back verification failed")
+    verified = _read_shared_cache(object_key, cache_key, identity, date.fromisoformat(identity["effective_dates"]["start"]),
+                                  date.fromisoformat(identity["effective_dates"]["end"]))
+    if verified is None or verified[2] != digest:
+        raise google_drive.GoogleDriveError("Satellite cache checksum or metadata verification failed")
+    return digest
+
+
+
 
 def _date_value(value: str) -> date | None:
     clean = value.strip()
@@ -758,6 +879,7 @@ def _sample_source(
     definition: SourceDefinition, token: str, products: list, lat: float, lon: float,
     start: date, end: date, cache_dir: Path, timeout: int, max_wait_seconds: int,
     task_index: dict[str, Any] | None = None,
+    existing_task_id: str | None = None,
 ) -> AppEEARSResult:
     key, name = definition["key"], definition["name"]
     selections = discover_layers(token, timeout, source_key=key, start=start, end=end, products=products, cache_dir=cache_dir)
@@ -779,12 +901,52 @@ def _sample_source(
     cache_path, pending_path = _cache_paths(cache_dir, cache_key)
     task_name = "fieldshift-v4-" + key + "-" + cache_key
     ttl = max(60, int(os.getenv("FIELD_SHIFT_APPEEARS_CACHE_TTL_SECONDS", "604800")))
+    identity = _cache_identity(key, lat, lon, requested_start, requested_end, start, end, selections)
+    shared_key = _shared_cache_key(identity)
+    shared_object_key = f"satellite-point-cache/v1/{key}/{shared_key}.json"
+
+    if google_drive.configured():
+        try:
+            shared = _read_shared_cache(shared_object_key, shared_key, identity, start, end)
+        except google_drive.GoogleDriveError:
+            shared = None
+        if shared is not None:
+            cached_rows, cached_statuses, digest = shared
+            stored = cached_statuses.get(name, {})
+            return result(
+                stored.get("status", "available"),
+                stored.get("coverage", "Verified shared NASA observations."),
+                cached_rows,
+                retrieval_mode="google_drive_cache",
+                quality_status=stored.get("quality_status"),
+                quality_note=stored.get("quality_note"),
+                retrieval_date=stored.get("retrieval_date"),
+                archive_cache_status="verified",
+                archive_object_key=shared_object_key,
+                archive_sha256=digest,
+            )
+
     cached, age, metadata = _read_cache(cache_path, ttl)
     if cached is not None:
         stored = metadata.get(name, {})
-        return result(stored.get("status", "available"), stored.get("coverage", "Cached NASA observations."), cached,
-                      retrieval_mode="cache", quality_status=stored.get("quality_status"), quality_note=stored.get("quality_note"),
-                      retrieval_date=stored.get("retrieval_date"), cache_age_seconds=int(age or 0))
+        archive_status = "not_configured"
+        archive_digest = None
+        if google_drive.configured():
+            try:
+                archive_digest = _publish_shared_cache(shared_object_key, shared_key, identity, cached, stored or {
+                    "name": name, "status": "available", "coverage": "Validated local AppEEARS result promoted to shared archive.",
+                })
+                archive_status = "verified"
+            except Exception:
+                archive_status = "write_failed"
+        return result(
+            stored.get("status", "available"), stored.get("coverage", "Cached NASA observations."), cached,
+            retrieval_mode="google_drive_cache_published" if archive_status == "verified" else "cache",
+            quality_status=stored.get("quality_status"), quality_note=stored.get("quality_note"),
+            retrieval_date=stored.get("retrieval_date"), cache_age_seconds=int(age or 0),
+            archive_cache_status=archive_status, archive_object_key=shared_object_key if archive_status == "verified" else None,
+            archive_sha256=archive_digest,
+        )
     task_id = ""
     task = None
     with _task_lock(task_name):
@@ -803,6 +965,21 @@ def _sample_source(
                     task_id = ""
         except (OSError, ValueError, TypeError, KeyError):
             pass
+        if not task_id and existing_task_id:
+            # Prefer the exact task ID persisted with this run. A stale or
+            # expired ID falls through to the account task-list discovery path.
+            try:
+                candidate = _safe_json_request(
+                    f"task/{urllib.parse.quote(existing_task_id, safe='-')}",
+                    token=token,
+                    timeout=timeout,
+                )
+                if _task_is_reusable(candidate):
+                    task_id = existing_task_id
+                    task = candidate
+            except AppEEARSDataError as exc:
+                if "HTTP 404" not in str(exc):
+                    raise
         if not task_id:
             existing = _find_recent_task(token, task_name, selections, timeout=timeout, task_index=task_index)
             task_id = str(existing.get("task_id", "")) if existing else ""
@@ -832,7 +1009,12 @@ def _sample_source(
             detail = safe_error(AppEEARSDataError(str(task.get("error") or task.get("message") or status)))
             return result("unavailable", f"This {key} task ended with status {status}; the other products run independently.", error=detail)
         if time.monotonic() >= deadline:
-            return result("pending", f"NASA is {status} this point sample. Refreshing resumes the same task.", retry_after_seconds=30)
+            return result(
+                "pending",
+                f"NASA is {status} this point sample. Refreshing resumes the same task.",
+                retry_after_seconds=30,
+                provider_task_id=task_id,
+            )
         time.sleep(min(10, max(0, deadline - time.monotonic())))
         task = None
     bundle = _safe_json_request(f"bundle/{task_id}", token=token, timeout=timeout)
@@ -855,16 +1037,50 @@ def _sample_source(
                     retrieval_mode="live", retrieval_date=retrieved, quality_status=quality, quality_note=note)
     _write_json(cache_path, {"remote": [{**asdict(row), "d": row.d.isoformat()} for row in remote],
                              "dataset_statuses": {name: output.datasets[0]}})
+    archive_status = "not_configured"
+    archive_digest = None
+    if google_drive.configured():
+        try:
+            archive_digest = _publish_shared_cache(
+                shared_object_key, shared_key, identity, remote, output.datasets[0],
+            )
+            archive_status = "verified"
+        except Exception as exc:
+            # The validated live data remains usable for this revision. A failed
+            # archive write is disclosed and can be retried; it is never a cache hit.
+            archive_status = "write_failed"
+            output.datasets[0]["archive_cache_error"] = safe_error(exc)
+    output.datasets[0]["archive_cache_status"] = archive_status
+    output.datasets[0]["archive_object_key"] = shared_object_key if archive_status == "verified" else None
+    output.datasets[0]["archive_sha256"] = archive_digest
+    _write_json(cache_path, {"remote": [{**asdict(row), "d": row.d.isoformat()} for row in remote],
+                             "dataset_statuses": {name: output.datasets[0]}})
     return output
 
 
 def appeears_point_timeseries(
-    lat: float, lon: float, start: date, end: date, *, cache_dir: str | Path,
-    timeout: int = 20, max_wait_seconds: int | None = None,
+    lat: float,
+    lon: float,
+    start: date,
+    end: date,
+    *,
+    cache_dir: str | Path,
+    timeout: int = 20,
+    max_wait_seconds: int | None = None,
+    existing_task_ids: dict[str, str] | None = None,
+    source_keys: set[str] | None = None,
 ) -> AppEEARSResult:
-    """One shared token, independent SMAP/MODIS/HLS tasks, resumable across requests."""
+    """Run only the selected independent product tasks, resumable across requests."""
+    selected_definitions = tuple(
+        definition for definition in SOURCE_DEFINITIONS
+        if source_keys is None or definition["key"] in source_keys
+    )
+    if not selected_definitions:
+        return AppEEARSResult((), ())
     if not credentials_configured():
-        return AppEEARSResult((), tuple(_source_statuses((), "not_configured", "Earthdata credentials are not configured on the server.")))
+        selected_names = {definition["name"] for definition in selected_definitions}
+        statuses = _source_statuses((), "not_configured", "Earthdata credentials are not configured on the server.")
+        return AppEEARSResult((), tuple(item for item in statuses if item.get("name") in selected_names))
     if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180 or start > end:
         raise ValueError("Invalid coordinate or date range for AppEEARS")
     max_days = max(1, min(366, int(os.getenv("FIELD_SHIFT_APPEEARS_MAX_DAYS", "366"))))
@@ -882,16 +1098,37 @@ def appeears_point_timeseries(
         token = _login_token(timeout=timeout)
         products = _metadata_request("product", token, timeout, Path(cache_dir))
     except Exception as exc:
-        return AppEEARSResult((), tuple(failure(d, exc) for d in SOURCE_DEFINITIONS))
+        return AppEEARSResult((), tuple(failure(d, exc) for d in selected_definitions))
     wait = max_wait_seconds if max_wait_seconds is not None else int(os.getenv("FIELD_SHIFT_APPEEARS_WAIT_SECONDS", "0"))
     task_index: dict[str, Any] = {}
 
     def sample(definition):
         try:
-            return _sample_source(definition, token, products, lat, lon, start, end, Path(cache_dir), timeout, max(0, min(30, wait)), task_index)
+            task_aliases = {
+                "smap": "nasa_smap",
+                "modis_et": "nasa_modis_mod16",
+                "hls_vi": "nasa_hls",
+            }
+            saved_task_id = (existing_task_ids or {}).get(definition["key"])
+            if not saved_task_id:
+                saved_task_id = (existing_task_ids or {}).get(task_aliases.get(definition["key"], ""))
+            return _sample_source(
+                definition,
+                token,
+                products,
+                lat,
+                lon,
+                start,
+                end,
+                Path(cache_dir),
+                timeout,
+                max(0, min(30, wait)),
+                task_index,
+                existing_task_id=saved_task_id,
+            )
         except Exception as exc:
             return AppEEARSResult((), (failure(definition, exc),))
 
     # NASA tasks remain independent, but HTTP requests are paced sequentially.
-    results = [sample(definition) for definition in SOURCE_DEFINITIONS]
+    results = [sample(definition) for definition in selected_definitions]
     return AppEEARSResult(tuple(row for r in results for row in r.remote), tuple(item for r in results for item in r.datasets))

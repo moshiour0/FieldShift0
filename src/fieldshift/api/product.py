@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fieldshift.v3.pipeline import DEFAULT_WEIGHTS, run_v3
+from fieldshift.v3.run_lifecycle import classify_run_readiness, source_key_for
 
 ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT = ROOT / "data" / "v3" / "fieldshift_v3_release_run.json"
@@ -212,6 +213,8 @@ def _evidence_state(lineage: list[dict[str, Any]], remote_coverage: float) -> di
         items.append({
             "id": hashlib.sha1(name.encode()).hexdigest()[:10],
             "name": name,
+            "source_key": source_key_for(name),
+            "required": source_key_for(name) in {"nasa_power_daily_weather"},
             "status": status,
             "source_type": source_type,
             "confidence": confidence,
@@ -222,6 +225,7 @@ def _evidence_state(lineage: list[dict[str, Any]], remote_coverage: float) -> di
             "fallback": record.get("fallback"),
             "error": record.get("error"),
             "retry_after_seconds": record.get("retry_after_seconds"),
+            "provider_task_id": record.get("provider_task_id") or record.get("task_id"),
             "request_stage": record.get("request_stage"),
             "http_status": record.get("http_status"),
             "setup_hint": record.get("setup_hint"),
@@ -233,6 +237,8 @@ def _evidence_state(lineage: list[dict[str, Any]], remote_coverage: float) -> di
             "temporal_resolution": record.get("temporal_resolution"),
             "spatial_resolution": record.get("spatial_resolution"),
             "citation": record.get("citation"),
+            "archive_years": record.get("archive_years"),
+            "archive_sha256s": record.get("archive_sha256s"),
         })
     usable = [i for i in items if i["status"] in {"available", "partial", "stale"}]
     satellite_sources = sum(1 for i in usable if i["source_type"] == "satellite")
@@ -287,6 +293,7 @@ def _make_product_response(run: dict[str, Any], field: dict[str, Any] | None, *,
     lineage = first_exp.get("data_lineage", [])
     remote_coverage = float((evaluations[0].get("indicators_by_scenario", {}).get("baseline", {}) or {}).get("values", {}).get("remote_observation_coverage_fraction", 0.0))
     evidence = _evidence_state(lineage, remote_coverage)
+    readiness = classify_run_readiness(evidence["items"])
     baseline = evaluations[0].get("indicators_by_scenario", {}).get("baseline", {}).get("values", {})
     water_score = top["dimensions"].get("irrigation_demand", 0.0)
     drought_score = top["dimensions"].get("drought_risk", 0.0)
@@ -305,7 +312,15 @@ def _make_product_response(run: dict[str, Any], field: dict[str, Any] | None, *,
             "engine_version": run.get("engine_version", "3.0.0"),
             "generated_at": run.get("generated_at"),
             "mode": mode,
-            "status": "pending" if any(i["status"] in {"pending", "retrying"} for i in evidence["items"]) else "complete",
+            "status": readiness["status"],
+            "status_message": readiness["status_message"],
+            "is_final": readiness["is_final"],
+            "prediction_eligible": readiness["prediction_eligible"],
+            "core_data_ready": readiness["core_data_ready"],
+            "pending_sources": readiness["pending_sources"],
+            "gap_sources": readiness["gap_sources"],
+            "missing_required_sources": readiness["missing_required_sources"],
+            "required_source_keys": readiness["required_source_keys"],
             "evidence_window": run.get("evidence_window", {}),
         },
         "field": field_ctx,
@@ -379,6 +394,8 @@ def _run_engine(payload: dict[str, Any]) -> dict[str, Any]:
         field_override=field,
         start_date=payload.get("start_date"),
         end_date=payload.get("end_date"),
+        provider_task_ids=payload.get("_provider_task_ids"),
+        allow_live_smap=bool(payload.get("_allow_live_smap", True)),
     )
     data = _engine_run_to_dict(result)
     data["run_id"] = f"run_{uuid.uuid4().hex[:12]}"
@@ -395,12 +412,11 @@ def create_demo() -> dict[str, Any]:
 
 def create_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     raw = _run_engine(payload)
-    # Keep the exact farmer-provided context with the in-process result so GET
-    # routes and what-if reruns do not silently replace it with pilot defaults.
-    raw["_product_field"] = json.loads(json.dumps(payload.get("field") or {}))
-    with _LOCK:
-        _RUNS[raw["run_id"]] = raw
-    return _make_product_response(raw, raw["_product_field"], demo=False, mode="live")
+    # Live farmer inputs/results are returned to the caller and, for signed-in
+    # durable runs, saved in Supabase by the API layer. Do not retain them in a
+    # process-global dictionary where a public run-ID route could expose them.
+    field_snapshot = json.loads(json.dumps(payload.get("field") or {}))
+    return _make_product_response(raw, field_snapshot, demo=False, mode="live")
 
 
 def get_analysis(run_id: str) -> dict[str, Any]:
@@ -436,12 +452,10 @@ def get_evidence(run_id: str, evidence_id: str) -> dict[str, Any]:
 
 
 def what_if(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        base = get_analysis(run_id)
-    except KeyError:
-        # Serverless requests can land on different instances, so accept the
-        # client-held field snapshot as the fallback source for what-if runs.
-        base = None
+    # Only the static demo may be reloaded from the public in-process snapshot.
+    # Live runs must use the caller's own submitted context, never another
+    # user's process-local run ID or cached farmer field.
+    base = get_analysis(run_id) if run_id == "demo_mymensingh_v3" else None
     base_field = (base or {}).get("field") or payload.get("field")
     if not isinstance(base_field, dict) or not isinstance(base_field.get("location"), dict):
         raise KeyError(run_id)
