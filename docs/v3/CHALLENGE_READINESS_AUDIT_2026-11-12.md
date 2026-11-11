@@ -42,7 +42,7 @@ The run below was created through the deployed application. These values describ
 | Source | Observed state | Correct interpretation |
 |---|---|---|
 | NASA POWER Daily weather | 365 daily records | Gridded point weather for the submitted coordinate; not an in-situ field sensor |
-| NASA HLS | 71 usable observation dates | Cloud/shadow-masked vegetation-index observations; not daily coverage |
+| NASA HLS | 71 provider observation dates in the pre-fix run | The old parser did not apply the stored-int scale/fill rule, so the derived means from this run are not trusted. PR #7 deployed the correction; a fresh HLS sample is still pending |
 | NASA MODIS MOD16 | 45 usable observation dates | 8-day ET composites with MODLAND QC=0 retained |
 | NASA SMAP | 0/365 at first processing attempt; pending | No valid daily root-zone values were available in that attempt; retry may reuse an archive or attempt AppEEARS |
 | NASA GPM IMERG | Not configured | POWER precipitation fallback is not GPM data |
@@ -58,10 +58,10 @@ The analysis initially produced preliminary revisions. A production persistence 
 1. **Point versus field area.** The submitted polygon is retained as farmer-provided geometry, but current POWER/AppEEARS adapters still sample the field-centre point. Do not describe these data as a zonal mean over the full polygon.
 2. **Soil is not observed everywhere.** The bundled soil profile is a Mymensingh pilot estimate. Outside that pilot, no such values are silently copied. A farmer estimate is not a laboratory report; generic physical defaults are not a soil survey.
 3. **Crop values are not yet calibrated locally.** The six current crop entries (Boro rice, Aman rice, Jute, Wheat, Mustard and Lentil) contain proxy yield, price, cost, coefficient and response values marked as placeholders. BRRI variety values must be attached to a named variety and season, not silently substituted for a generic crop parameter.
-3. **HLS scale and fill handling is corrected in Production.** PR #7 applies the official 0.0001 scale factor, excludes the documented fill/out-of-range values, and invalidates previous HLS caches. The post-deploy request reported HLS pending and did not emit invalid indices; new usable observation coverage is still pending. See NASA [HLSL30-VI](https://doi.org/10.5067/HLS/HLSL30_VI.002) and [HLSS30-VI](https://doi.org/10.5067/HLS/HLSS30_VI.002) metadata.
-4. **Diagnostic climate stress tests are not climate projections.** The fallback SSP2-4.5/SSP5-8.5 deltas must not be described as NASA NEX-GDDP-CMIP6 data when no matching projection dataset was retrieved.
-5. **Provider configuration is not provider success.** AppEEARS, Earth Engine and Drive credentials have distinct purposes. A Drive archive secret is not an Earth Engine credential. An HTTP 200 or configured flag does not prove an upstream dataset was returned.
-6. **Satellite products have different spatial and temporal support.** SMAP L4 is a 3-hourly, approximately 9 km assimilated geophysical product; MOD16 ET is an 8-day, 500 m composite; POWER meteorology uses source-specific gridded resolution. These should not be presented as equivalent field-scale measurements.
+4. **HLS scale and fill handling is corrected in Production.** PR #7 applies the official 0.0001 scale factor, excludes the documented fill/out-of-range values, and invalidates previous HLS caches. The post-deploy request reported HLS pending and did not emit invalid indices; new usable observation coverage is still pending. See NASA [HLSL30-VI](https://doi.org/10.5067/HLS/HLSL30_VI.002) and [HLSS30-VI](https://doi.org/10.5067/HLS/HLSS30_VI.002) metadata.
+5. **Diagnostic climate stress tests are not climate projections.** The fallback SSP2-4.5/SSP5-8.5 deltas must not be described as NASA NEX-GDDP-CMIP6 data when no matching projection dataset was retrieved.
+6. **Provider configuration is not provider success.** AppEEARS, Earth Engine and Drive credentials have distinct purposes. A Drive archive secret is not an Earth Engine credential. An HTTP 200 or configured flag does not prove an upstream dataset was returned.
+7. **Satellite products have different spatial and temporal support.** SMAP L4 is a 3-hourly, approximately 9 km assimilated geophysical product; MOD16 ET is an 8-day, 500 m composite; POWER meteorology uses source-specific gridded resolution. These should not be presented as equivalent field-scale measurements.
 
 ## What “100% challenge-ready” should mean
 
@@ -69,9 +69,9 @@ The project can close every software requirement, but scientific completion need
 
 ### A. Product and operational gates
 
-- [ ] Production PR containing the result-pointer, field-input, geometry and provider-routing fixes is merged.
-- [ ] GitHub CI passes Python 3.11 and 3.12, including tests, compileall, Ruff and mypy.
-- [ ] Production deploy is READY on the merged `main` SHA.
+- [x] Production PR containing the result-pointer, field-input, geometry and provider-routing fixes is merged (PR #6).
+- [x] GitHub CI passes Python 3.11 and 3.12, including tests, compileall, Ruff and mypy (latest main release CI run #735 succeeded).
+- [x] Production deploy is READY on the merged `main` SHA `5f0d11186868d9a83a9fff7b66156dfc5bfb6eef`.
 - [ ] A signed-in user can submit an analysis, close the browser, reopen My Runs, restore the same result and inspect each source.
 - [ ] The restored result is read from the private archive and its byte count/SHA-256 are verified.
 - [ ] The run summary echoes the submitted coordinate, area, date range, irrigation reliability and whether a boundary was supplied.
