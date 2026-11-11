@@ -111,7 +111,7 @@ The live app reports Auth configuration present, and the two persisted analysis 
 In Supabase Dashboard → **Authentication → URL Configuration**, set:
 
 - **Site URL:** `https://field-shift0.vercel.app`
-- **Redirect URL:** `https://field-shift0.vercel.app/**`
+- **Redirect URL:** `https://field-shift0.vercel.app/` (the current magic-link form sends `window.location.origin + window.location.pathname` from the root page; use this exact URL, not a broad wildcard).
 
 Only change these settings if they are not already saved. Then open the stable Production URL, use the existing confirmed email account, request a new sign-in link and click the newest link. Verify `/api/auth/me` returns the authenticated user and the UI switches from **Sign in** to **My Runs**. Finally, reopen one of the existing runs after a fresh session. Do not create another account just to repeat confirmation.
 
