@@ -133,7 +133,7 @@ def account_runs(request: Request) -> dict[str, Any]:
             "analysis_runs",
             access_token=str(token),
             filters={
-                "select": "id,created_at,updated_at,started_at,completed_at,last_activity_at,requested_start,requested_end,status,stage,progress_percent,status_message,engine_version",
+                "select": "id,created_at,requested_start,requested_end,status,status_message",
                 "user_id": f"eq.{user['id']}",
                 "order": "created_at.desc",
                 "limit": "50",
@@ -186,8 +186,9 @@ def account_run_recheck(run_id: str, request: Request) -> dict[str, Any]:
     }
 
 
-@app.get("/api/account/runs/{run_id}")
-def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
+@app.get("/api/account/runs/{run_id}/status")
+def account_run_status(run_id: str, request: Request) -> dict[str, Any]:
+    """Return only small owner-scoped run/source state; never read result JSON while polling."""
     import uuid
 
     try:
@@ -202,7 +203,7 @@ def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
             "analysis_runs",
             access_token=str(token),
             filters={
-                "select": "*",
+                "select": "id,status,stage,progress_percent,status_message,latest_result_id,updated_at,completed_at,last_activity_at",
                 "id": f"eq.{safe_run_id}",
                 "user_id": f"eq.{user['id']}",
                 "limit": "1",
@@ -214,29 +215,88 @@ def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
             "analysis_run_sources",
             access_token=str(token),
             filters={
-                "select": "*",
+                "select": "source_name,status,required,next_retry_at",
                 "run_id": f"eq.{safe_run_id}",
                 "order": "created_at.asc",
-            },
-        )
-        results = supabase_auth.rest_select(
-            "analysis_results",
-            access_token=str(token),
-            filters={
-                "select": "*",
-                "run_id": f"eq.{safe_run_id}",
-                "order": "revision.desc",
+                "limit": "50",
             },
         )
     except supabase_auth.SupabaseAPIError as exc:
         status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-    result_rows = results if isinstance(results, list) else []
     return {
         "run": run_rows[0],
         "sources": sources if isinstance(sources, list) else [],
-        "results": result_rows,
-        "latest_result": result_rows[0] if result_rows else None,
+    }
+
+
+@app.get("/api/account/runs/{run_id}")
+def account_run_detail(run_id: str, request: Request) -> dict[str, Any]:
+    """Read a single current revision; large result JSON is hydrated from private Google Drive."""
+    import uuid
+
+    try:
+        safe_run_id = str(uuid.UUID(run_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=404, detail="Saved analysis not found.") from exc
+    token, user = _auth_context(request)
+    if not token or not user:
+        raise HTTPException(status_code=401, detail="Sign in to access saved analyses.")
+    try:
+        run_rows = supabase_auth.rest_select(
+            "analysis_runs",
+            access_token=str(token),
+            filters={
+                "select": "id,client_request_id,request_payload,requested_start,requested_end,status,stage,progress_percent,status_message,latest_result_id,created_at,updated_at,completed_at,last_activity_at",
+                "id": f"eq.{safe_run_id}",
+                "user_id": f"eq.{user['id']}",
+                "limit": "1",
+            },
+        )
+        if not isinstance(run_rows, list) or not run_rows:
+            raise HTTPException(status_code=404, detail="Saved analysis not found.")
+        sources = supabase_auth.rest_select(
+            "analysis_run_sources",
+            access_token=str(token),
+            filters={
+                "select": "source_name,status,required,next_retry_at",
+                "run_id": f"eq.{safe_run_id}",
+                "order": "created_at.asc",
+                "limit": "50",
+            },
+        )
+        latest_result_id = run_rows[0].get("latest_result_id")
+        results = []
+        if latest_result_id:
+            results = supabase_auth.rest_select(
+                "analysis_results",
+                access_token=str(token),
+                filters={
+                    "select": "id,run_id,revision,result_kind,evidence_fingerprint,result_payload,is_current,created_at",
+                    "id": f"eq.{latest_result_id}",
+                    "run_id": f"eq.{safe_run_id}",
+                    "limit": "1",
+                },
+            )
+    except supabase_auth.SupabaseAPIError as exc:
+        status_code = exc.status_code if exc.status_code in {401, 403, 503} else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    result_rows = results if isinstance(results, list) else []
+    hydrated_results = []
+    try:
+        for row in result_rows:
+            if not isinstance(row, dict):
+                continue
+            hydrated = dict(row)
+            hydrated["result_payload"] = supabase_auth.restore_result_payload(hydrated.get("result_payload"))
+            hydrated_results.append(hydrated)
+    except supabase_auth.SupabaseAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "run": run_rows[0],
+        "sources": sources if isinstance(sources, list) else [],
+        "results": hydrated_results,
+        "latest_result": hydrated_results[0] if hydrated_results else None,
     }
 
 
