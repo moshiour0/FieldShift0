@@ -4,10 +4,10 @@
 > **Last updated:** 2026-11-12 (Asia/Dhaka)  
 > **Repository:** moshiour0/FieldShift0  
 > **Production branch:** `main`  
-> **Merged release:** PR #1, PR #4 and PR #6; see current handoff  
+> **Merged release:** PR #1, PR #4, PR #6 and PR #7; see current handoff  
 > **Production rule:** Production is already released. Do not follow earlier Preview-only deployment instructions.
 
-> **Current release status — 12 November 2026:** Production is READY on `main` at `456ef50920b6c0518d536becea042aa19d32acbe` (PR #6 merge). Supabase contains 2 authenticated runs, 9 result revisions, 24 evidence-source records and 9 events; the two current result pointers are valid, but the runs remain preliminary while provider evidence is pending. The HLS-VI scale/fill correction and cache invalidation are under review in `fix/hls-vi-scale-fill-guard-2026-11-12`; do not trust previous HLS means until the fix is deployed and a fresh point sample is checked. The earlier implementation notes below are retained as history. For current operational truth and acceptance gates, follow [Final Owner Handoff — 12 November 2026](FINAL_HANDOFF_2026-11-12.md) and [Challenge Readiness Audit](CHALLENGE_READINESS_AUDIT_2026-11-12.md).
+> **Current release status — 12 November 2026:** Production is READY on `main` at `5f0d11186868d9a83a9fff7b66156dfc5bfb6eef` (PR #7 merge), deployment `dpl_9uTrUGsS35FW9ysZqt7rJuri9vAG`. Supabase contains 2 authenticated runs, 9 result revisions, 24 evidence-source records and 9 events; both current result pointers are valid, and all 9 revisions have Google Drive object/size/SHA metadata. Both runs remain preliminary pending provider evidence. PR #7's HLS-VI scale/fill handling and cache invalidation are deployed and CI passed on Python 3.11/3.12. The first post-deploy dynamic check returned HLS pending and no out-of-range means; a fresh valid HLS observation is still required. The earlier implementation notes below are retained as history. For current operational truth and acceptance gates, follow [Final Owner Handoff — 12 November 2026](FINAL_HANDOFF_2026-11-12.md) and [Challenge Readiness Audit](CHALLENGE_READINESS_AUDIT_2026-11-12.md).
 
 
 ## 0. Historical operational checkpoint — 2026-11-10 15:40 UTC (superseded by the current release status above)

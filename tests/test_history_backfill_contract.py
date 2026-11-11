@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 
-def test_power_history_backfill_is_manual_gated_and_resumable() -> None:
+def test_power_history_backfill_is_one_time_main_trigger_plus_manual_and_resumable() -> None:
     workflow_path = (
         Path(__file__).resolve().parents[1]
         / ".github"
@@ -14,9 +14,13 @@ def test_power_history_backfill_is_manual_gated_and_resumable() -> None:
     )
     workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
-    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert set(workflow["on"]) == {"push", "workflow_dispatch"}
+    push = workflow["on"]["push"]
+    assert push["branches"] == ["main"]
+    assert push["paths"] == [".github/history-backfill-once.trigger"]
+
+    # Manual dispatch remains a small completed-year pilot by default.
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
-    # The first run must be a small, completed-year pilot, not the full backfill.
     assert inputs["start_year"]["default"] == "2025"
     assert inputs["end_year"]["default"] == "2025"
 
@@ -36,6 +40,12 @@ def test_power_history_backfill_is_manual_gated_and_resumable() -> None:
         assert name in credentials["env"][name]
     assert "No NASA data request was started." in credentials["run"]
     assert "scripts/google_drive_archive.py verify" in credentials["run"]
+    assert "github.event_name == 'workflow_dispatch' && github.event.inputs.start_year || 2016" in credentials["env"]["START_YEAR"]
+    assert "github.event_name == 'workflow_dispatch' && github.event.inputs.end_year || 2025" in credentials["env"]["END_YEAR"]
+
+    marker = Path(__file__).resolve().parents[1] / ".github" / "history-backfill-once.trigger"
+    assert marker.exists()
+    assert "2016–2025" in marker.read_text(encoding="utf-8")
 
     ingest = workflow["jobs"]["ingest"]
     assert ingest["needs"] == "preflight"

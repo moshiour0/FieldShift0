@@ -416,7 +416,7 @@ function openAccount(){
           <button class="primary" type="submit" style="margin-top:12px;width:100%">Email me a sign-in link</button>
         </form>
         <p id="account-message" class="small" role="status">We use passwordless email sign-in. Your runs are private to your account.</p>
-        <div class="state-card"><div><strong>Email delivery note</strong><span>Supabase's default email sender is limited to organization members. For public sign-ups, a custom SMTP provider must be configured. The Preview host must also be added to Auth redirect URLs.</span></div></div>
+        <div class="state-card"><div><strong>Production sign-in setup</strong><span>Allow this exact redirect in Supabase Auth → URL Configuration: https://field-shift0.vercel.app/. The built-in Free email sender may be rate-limited; no paid SMTP provider is configured.</span></div></div>
       </div>`);
   }
 }

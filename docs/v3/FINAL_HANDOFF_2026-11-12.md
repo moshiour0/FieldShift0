@@ -3,10 +3,10 @@
 **Last verified:** 12 November 2026 (Asia/Dhaka)  
 **Repository:** `moshiour0/FieldShift0`  
 **Production branch:** `main`  
-**Latest merged change:** PR #6 — [Fix FieldShift result loading and preserve field inputs](https://github.com/moshiour0/FieldShift0/pull/6)  
-**Main release SHA:** `456ef50920b6c0518d536becea042aa19d32acbe`  
+**Latest merged change:** PR #7 — [Fix HLS vegetation-index scaling and invalidate bad caches](https://github.com/moshiour0/FieldShift0/pull/7)  
+**Main release SHA:** `5f0d11186868d9a83a9fff7b66156dfc5bfb6eef`  
 **Stable Production URL:** https://field-shift0.vercel.app  
-**Current Production deployment:** `dpl_ABfXZhQpny7UkxfBvcpWGs4CsPJb` — READY, exact main SHA above  
+**Current Production deployment:** `dpl_9uTrUGsS35FW9ysZqt7rJuri9vAG` — READY, exact main SHA above  
 **Supabase:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · Free plan · ACTIVE_HEALTHY  
 **Budget rule:** remain on existing Free/Hobby resources; no paid SMTP, plan upgrade, extra database, or new storage billing.
 
@@ -14,13 +14,13 @@
 
 ## 1. Release decision
 
-The FieldShift0 application, PR #4's egress/storage changes, and PR #6's result-pointer/field-input repairs are merged and live in Production. The current Production deployment is READY on exact `main` SHA `456ef50920b6c0518d536becea042aa19d32acbe`.
+The FieldShift0 application, PR #4's egress/storage changes, PR #6's result-pointer/field-input repairs, and PR #7's HLS scale/cache correction are merged and live in Production. The current Production deployment is READY on exact `main` SHA `5f0d11186868d9a83a9fff7b66156dfc5bfb6eef`.
 
 The project is **not yet fully accepted as an end-to-end live-data service or field-validated agronomy product**. Two authenticated runs and their preliminary result revisions now exist, and their latest-result pointers are consistent. The runs are still waiting for provider data; a full Drive result restore after a fresh sign-in, national data archive completion, and agronomic field validation remain open. Do not describe those gates as complete.
 
 ## 2. Live Production verification
 
-The stable Production alias was checked after PR #6 was merged on 12 November:
+The stable Production alias was checked after PR #7 was merged on 12 November:
 
 | Endpoint | Result | What it proves |
 |---|---:|---|
@@ -45,9 +45,9 @@ The live `/api/status` response reports:
 
 A public HTTP 200 or configured credential flag is not proof of a successful upstream provider call.
 
-## 3. PR #4 and PR #6 release contents
+## 3. PR #4, PR #6 and PR #7 release contents
 
-PR #4 was merged to `main` as `15b216b2d8379f4d18ccae0a5603739214e4ffac`; its post-merge CI run succeeded. PR #6 was merged as `456ef50920b6c0518d536becea042aa19d32acbe`; both Python 3.11 and 3.12 CI jobs succeeded (run `43111044356`).
+PR #4 was merged to `main` as `15b216b2d8379f4d18ccae0a5603739214e4ffac`; its post-merge CI run succeeded. PR #6 was merged as `456ef50920b6c0518d536becea042aa19d32acbe`; both Python 3.11 and 3.12 CI jobs succeeded (run `43111044356`). PR #7 was merged as `5f0d11186868d9a83a9fff7b66156dfc5bfb6eef`; its PR CI run `43114577889` and post-merge main CI run `43114779650` both passed on Python 3.11 and 3.12.
 
 The PR #4 storage release includes:
 
@@ -65,6 +65,15 @@ PR #6 adds:
 3. The field-centre query location is aligned to the drawn polygon centroid; the UI labels the current satellite extraction as centre-point sampling, not a polygon-wide field average.
 4. Initial demo loading no longer resets the user's live field form inputs; queued-run summaries echo the submitted coordinate, area, date window, irrigation reliability and boundary state.
 5. The SMAP routing keeps Google Drive cache reads distinct from Earth Engine credentials and allows AppEEARS fallback when GEE is not configured.
+
+PR #7 fixes the NASA HLS-VI scientific scaling boundary:
+- NDVI/EVI/NDMI stored int16 values use the official 0.0001 scale factor.
+- NASA's -9999 fill value and other sentinel/out-of-range values are rejected before averaging.
+- Physical values must lie in [-1, 1].
+- Local and private Google Drive cache identities were versioned so old unscaled HLS records are not reused as current observations.
+- Regression tests cover scaled integers, already-scaled values, fill sentinels, invalid ranges and cached records.
+
+NASA metadata: [HLSL30-VI](https://doi.org/10.5067/HLS/HLSL30_VI.002) and [HLSS30-VI](https://doi.org/10.5067/HLS/HLSS30_VI.002).
 
 The PR's GitHub Actions private Drive preflight passed with the four repository secrets. That proves the GitHub Actions credential set and private folder supported the test at that time. It does **not** prove that the separately configured Vercel Production credentials have completed a round-trip.
 
@@ -121,20 +130,22 @@ Supabase's default Free SMTP is testing-only and rate-limited; do not treat it a
 
 ## 7. Data archive status and scientific boundaries
 
+- After PR #7 deployed, a fresh live `GET /api/v3/demo` completed with 13 strategies and no HLS NDVI/NDMI values outside the physical `[-1, 1]` range. That specific request returned HLS/SMAP/MOD16 as `pending`, so it confirms safe missing-data behaviour, not a fresh valid HLS observation sample. PR #7's scale, fill and cache regression tests passed on Python 3.11/3.12.
+- The previous HLS values in the earlier signed-in run came from the pre-fix cache and must not be treated as a validated new sample. The versioned cache key prevents those old unscaled rows from being reused by the new parser; the run's new provider task must finish before HLS coverage is claimed.
 - The nine 2025 NASA POWER reference-point daily archives were previously verified at 365/365 records each with complete coverage and SHA-256 provenance. These are gridded representative-point samples, not field sensors, farm coordinates, district averages or official AEZ means.
 - Full daily 2016–2025 coverage across all nine points is **not yet verified**. The 2016–2024 daily backfill must be dispatched and its per-region/per-year output audited before claiming a complete ten-year daily archive.
 - A real point analysis returned NASA POWER and SMAP daily observations plus HLS-VI observation dates, with some satellite cache objects stored in private Drive and SHA-256 verified. This is one point/time-window result, not a nationwide archive.
 - MODIS MOD16 returned no usable values after QA for that run; GPM was not configured; NEX-GDDP-CMIP6 projections were not available and its displayed scenarios remain labelled diagnostic stress tests; SoilGrids remained disabled.
-- A production audit found HLS-VI values outside the documented physical NDVI/EVI/NDMI range. The HLS parser/cache-version correction is being validated in the open follow-up PR; do not use previously cached HLS means as trusted measurements until that correction is deployed and a new sample is verified.
+- A production audit found HLS-VI values outside the documented physical NDVI/EVI/NDMI range. PR #7 has now deployed the scale/range fix and cache invalidation. The post-deploy dynamic check returned HLS as pending with no invalid values (no fresh mean was emitted); wait for a new HLS sample and confirm physical values in `[-1, 1]` before using it in a farmer-facing analysis.
 - SMAP L4 values are assimilated geophysical estimates, not in-situ field moisture measurements. NASA POWER, SMAP and HLS outputs are centre-point samples at their native spatial/temporal support; they are not polygon-wide field averages.
 - Earth Engine access remains disabled by default until the owner has explicitly verified eligible non-commercial/research use and no paid Cloud billing/service path. Do not set the GEE opt-in flag just to make a status indicator green.
 - Current crop/soil guidance remains a Mymensingh-oriented pilot pending Bangladesh-local crop-calendar, soil, yield/price and field validation with qualified agronomist review. It is not a nationally calibrated agronomy prescription.
 
 ## 8. Exact remaining acceptance gates
 
-1. **HLS correction:** merge the HLS scale/range/cache-invalidation fix only after CI passes; deploy it and verify a new sample has NDVI/EVI/NDMI within `[-1, 1]` or is reported missing.
+1. **Fresh HLS sample:** allow the persisted AppEEARS HLS task to finish and confirm a new observation sample has NDVI/EVI/NDMI within `[-1, 1]`; the post-deploy smoke check currently reports HLS pending, not complete.
 2. **Authenticated continuity and result restore:** complete a fresh Production sign-in, reopen an existing run, and verify that the full result is restored from private Google Drive with byte-count/SHA-256 checks.
-3. **Historical POWER:** run **Backfill nine-region NASA POWER daily history** from GitHub Actions with branch `main`, `start_year=2016`, `end_year=2025`. Confirm all 9×10 annual objects, expected daily counts, checksums and no silently substituted coordinates. A workflow starting is not completion.
+3. **Historical POWER:** when PR #8 merges, the one-time marker `.github/history-backfill-once.trigger` starts **Backfill nine-region NASA POWER daily history** on `main` with `start_year=2016`, `end_year=2025`. The workflow runs its four-secret/private-Drive read-back preflight before NASA requests, then archives all 90 region-year objects with daily coverage, SHA-256 and Drive byte-for-byte read-back verification. Monitor the workflow to completion and confirm all 90/90 objects, expected daily counts and no missing dates. A started or preflight-only run is not completion. Manual `workflow_dispatch` remains available for targeted reruns; its default remains the 2025 pilot.
 4. **Auth settings:** verify Supabase Site URL and exact Production Redirect URL are saved; do not create a new account or change working settings unnecessarily.
 5. **Ownership isolation:** use a second owner-controlled account and confirm it cannot list, read or recheck the first account's run.
 6. **Provider acceptance:** validate AppEEARS task creation/resume and each requested satellite provider using actual returned task IDs, product version, QA, date coverage and private cache integrity. Do not infer live validation from `credentials_configured=true`.
@@ -149,4 +160,4 @@ Supabase's default Free SMTP is testing-only and rate-limited; do not treat it a
 - Never put OAuth tokens, Google Drive folder IDs, worker secrets, Supabase service-role keys or email credentials in source control, public logs or chat.
 - Do not label an untested provider, data source or login path as complete.
 
-**Final status:** Production code release PR #6 is merged and READY. Two authenticated runs and their current-result pointers are persisted correctly, but provider retries remain pending and HLS-VI scaling has a follow-up correction in validation. Full operational and scientific acceptance is still open for HLS redeployment/re-sampling, fresh-session result restoration, historical backfill, provider coverage, ownership isolation and Bangladesh field/a​​gronomic validation. See [NASA Space Apps Challenge Readiness Audit](CHALLENGE_READINESS_AUDIT_2026-11-12.md) for the evidence gates.
+**Final status:** Production code release PR #7 is merged and READY. The result-pointer repair is verified against two real authenticated runs (9 revisions, 24 source records, 9 events; zero current-pointer mismatches). Private Drive object pointers and SHA-256 metadata exist for every result revision, but a fresh-session byte-for-byte Drive restore remains unverified. The HLS scale/fill fix is deployed; its first new provider check returned pending rather than invalid values, so fresh HLS observations still need verification. Full operational and scientific acceptance remains open for provider task completion, historical POWER backfill, Auth-session/result restoration, owner isolation and Bangladesh field/agronomic validation. See [NASA Space Apps Challenge Readiness Audit](CHALLENGE_READINESS_AUDIT_2026-11-12.md) for the evidence gates.
