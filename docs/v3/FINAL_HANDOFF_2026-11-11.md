@@ -255,3 +255,44 @@ This is a temporary Preview Site URL. Before a future Production release, change
 ### Owner action only if eligible
 
 Do not set `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` until Google confirms the project is registered for noncommercial use and no paid Cloud products/billing will generate charges. If the project is used commercially/operationally/fee-for-service, leave the flag absent and keep GEE disabled under the strict $0 budget. No payment method or billing plan should be added for this purpose.
+
+
+---
+
+## 15. Final Production release — 11 November 2026
+
+### GitHub release
+
+- PR #1 merged successfully to `main`: merge commit `1e96de91ba991c6265a9db6956bffedb880115a2`.
+- The feature branch was 356 commits ahead and 0 behind the then-current `main`; GitHub reported it mergeable. Latest CI run #648 (`42980311471`) passed Python 3.11 and 3.12: **188 passed per job**, Ruff, compileall and mypy passed (one existing Starlette/httpx deprecation warning).
+- PR #2 (SMAP workflow) and PR #3 (weekly POWER refresh workflow) were closed as superseded; both workflow files were already included in PR #1 and are now on `main`.
+- The manual POWER historical backfill workflow now accepts `main` as the recommended run branch as well as the retained feature branch. The SMAP workflow has the same branch allowance but remains blocked until the GEE noncommercial opt-in is intentionally confirmed.
+
+### Stable Vercel Production
+
+- Stable public URL: **`https://field-shift0.vercel.app`**.
+- Production deployment: `dpl_3VC3cvM2L9YaCSVyYmxwj65b6yez`, source SHA `1e96de91ba991c6265a9db6956bffedb880115a2`, state **READY**.
+- SSO protection is now scoped to Preview only; Production is public, while Preview deployments stay protected. No password, custom domain or paid add-on was configured.
+- Production Vercel contains `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_ANON_KEY`, `FIELDSHIFT_WORKER_TOKEN`, `FIELD_SHIFT_WORKER_SECRET` and `VERCEL_AUTOMATION_BYPASS_SECRET`. The encrypted worker/auth secrets were moved to Production without reading or printing their values.
+- Production reuses the existing single Supabase Free project (`bipyrlegaxmhwzwrmcmi`); no second project was created and no plan/billing change was made. This means Preview and Production use the same Supabase database, with owner isolation enforced by RLS.
+- Supabase Vault `fieldshift_worker_url` now points to `https://field-shift0.vercel.app`. The canonical five-minute `fieldshift-analysis-worker` cron remains active. A release smoke tick using the Vault worker token and Vercel bypass secret returned HTTP 200 with `processed=false` because the job queue was empty.
+- Production smoke checks returned HTTP 200 for `/`, `/health`, `/api/status`, `/api/auth/config`, `/api/demo` and `/school-game/`. `/api/status` reports email magic-link auth configured, saved runs in Supabase Postgres, durable queue/result storage, Google Drive archive credentials present and Earth Engine not configured. No runtime error clusters were found in the final checked window.
+
+### Remaining owner action: Supabase Auth redirect
+
+The Supabase Management/Auth URL Configuration cannot be edited through the connected Supabase tool. In Supabase Dashboard → Authentication → URL Configuration set:
+
+- **Site URL:** `https://field-shift0.vercel.app`
+- **Redirect URL:** `https://field-shift0.vercel.app/**`
+
+Save it, then open the stable Production URL, use the existing email account and request a new sign-in link. Successful callback is confirmed only after `/api/auth/me` validates the session and the page displays the signed-in confirmation / `My Runs`. The existing email is already confirmed; do not create another account. Default Supabase SMTP on Free is testing-only, rate-limited to two messages per hour and restricted to organization-team addresses; no custom SMTP or paid service is configured.
+
+### Remaining data/operator action
+
+- The 2016–2025 POWER daily backfill workflow is now registered on `main`; the Actions connection cannot dispatch workflows, so the owner must run **Backfill nine-region NASA POWER daily history** from Actions with branch `main`, years 2016–2025. The four Google Drive Actions secrets were reported added by the owner; preflight performs the actual credential and Drive verification before data requests.
+- Weekly POWER refresh remains disabled until repository variable `GOOGLE_DRIVE_ARCHIVE_ENABLED=true` is set after successful archive preflight. No such variable was set by this release.
+- SMAP/GPM/NEX Earth Engine remains disabled in Vercel Production. Do not enable `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` until eligible noncommercial/research registration and no paid Google Cloud billing/services are verified. This is intentional under the strict $0 requirement.
+- Authenticated sign-in and owner-scoped My Runs still need the human browser acceptance test after the redirect setting is fixed; no user credentials or synthetic analysis rows were created.
+- The one shared Free Supabase database means Preview and Production share run storage. The Preview deployment remains behind Vercel SSO; user data remains owner-scoped by RLS.
+
+**Release status:** Production app is live at the stable URL and the durable worker integration is verified. The email redirect dashboard setting and historical data backfill dispatch are the remaining owner actions; do not describe those as completed until their results are observed.
