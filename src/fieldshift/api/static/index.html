@@ -282,6 +282,7 @@ function renderAccountButton(){
 }
 async function initAccount(){
   state.auth.loading=true;
+  let returnedFromEmailLink=false;
   try{
     const configResponse=await fetch('/api/auth/config');
     state.auth.config=await configResponse.json();
@@ -290,6 +291,7 @@ async function initAccount(){
     const authError=fragment.get('error_description')||fragment.get('error_code');
     if(authError){toast(authError);history.replaceState(null,document.title,window.location.pathname+window.location.search);}
     if(accessToken){
+      returnedFromEmailLink=true;
       storeAuthSession({
         access_token:accessToken,
         refresh_token:fragment.get('refresh_token'),
@@ -303,7 +305,13 @@ async function initAccount(){
       try{
         const data=await accountApi('/api/auth/me');
         state.auth.user=data.user;
-      }catch(e){clearAuthSession()}
+        if(returnedFromEmailLink)toast('Email verified. You are signed in and My Runs is ready.');
+      }catch(e){
+        clearAuthSession();
+        if(returnedFromEmailLink)toast('The email link returned, but this app could not verify the session. Check the Supabase redirect settings and request a new link.');
+      }
+    }else if(returnedFromEmailLink){
+      toast('The email link returned without a usable session. Please request a new link.');
     }
   }catch(e){state.auth.config={configured:false};console.warn('Account setup unavailable:',e.message)}
   finally{state.auth.loading=false;renderAccountButton()}
