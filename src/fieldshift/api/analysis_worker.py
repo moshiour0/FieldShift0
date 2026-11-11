@@ -195,7 +195,7 @@ def _load_run(run_id: str, worker_token: str) -> dict[str, Any]:
     return row
 
 
-def _save_result(job_id: str, result: dict[str, Any], worker_token: str) -> dict[str, Any]:
+def _save_result(job_id: str, run_id: str, result: dict[str, Any], worker_token: str) -> dict[str, Any]:
     run = result.get("run") or {}
     items = (result.get("evidence") or {}).get("items") or []
     if not isinstance(items, list):
@@ -354,7 +354,7 @@ def process_one(worker_token: str | None = None) -> dict[str, Any]:
         request_payload["_allow_live_smap"] = int(job.get("attempts") or 1) >= 2
 
         result = create_analysis(request_payload)
-        saved = _save_result(job_id, result, configured_token)
+        saved = _save_result(job_id, run_id, result, configured_token)
         return {
             "processed": True,
             "run_id": run_id,
