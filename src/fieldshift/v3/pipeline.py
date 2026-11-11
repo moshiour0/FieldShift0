@@ -269,7 +269,7 @@ def _load_optional_remote(
                 ),
             })
     use_gee_smap = False
-    if allow_live and start <= end and gee_credentials_configured():
+    if allow_live and start <= end and (gee_credentials_configured() or google_drive.configured()):
         existing_smap = next(
             (row for row in datasets if row.get("name") == "NASA SMAP" and row.get("status") == "available"),
             None,
@@ -284,7 +284,7 @@ def _load_optional_remote(
             try:
                 smap_result = smap_daily_point_timeseries(
                     field.lat, field.lon, start, end, cache_dir=cache_dir,
-                    allow_live_query=allow_live_smap,
+                    allow_live_query=allow_live_smap and gee_credentials_configured(),
                 )
                 remote.extend(smap_result.rows)
                 expected_smap_days = (end - start).days + 1
