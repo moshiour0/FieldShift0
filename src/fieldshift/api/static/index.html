@@ -101,7 +101,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
   <p id="evidence-window" class="small muted"></p>
   <div class="section-head"><div><span class="eyebrow">02 · Field evidence</span><h2>See the field context before the ranking.</h2><p>Evidence state comes first; modeled signals below are explicitly tied to the leading baseline strategy, not presented as raw observations.</p></div><div id="qualityBadge" class="badge warn">Evidence state: awaiting analysis</div></div>
   <div class="metrics" id="snapshotMetrics"><div class="metric-card"><div class="kicker">Water</div><div class="metric-main"><div class="metric-value">—</div></div><p>Run the field analysis to populate the field snapshot.</p></div><div class="metric-card soil"><div class="kicker">Soil</div><div class="metric-main"><div class="metric-value">—</div></div><p>Soil trajectory, residue, cover and pH features.</p></div><div class="metric-card heat"><div class="kicker">Heat</div><div class="metric-main"><div class="metric-value">—</div></div><p>Simulated heat exposure for the evaluated rotation.</p></div><div class="metric-card"><div class="kicker">Yield</div><div class="metric-main"><div class="metric-value">—</div></div><p>Climate-adjusted baseline yield estimate.</p></div></div>
-  <div class="surface pad" style="margin-top:14px"><div class="section-head" style="margin-bottom:10px"><div><h3 style="margin:0;font-size:18px">Evidence chain</h3><p class="small">Source, type and limitations remain inspectable.</p></div><button class="ghost" onclick="openEvidenceAll()">Inspect all evidence</button></div><div class="evidence-list" id="evidenceList"><div class="muted small">No evidence loaded yet.</div></div></div>
+  <div class="surface pad" style="margin-top:14px"><div class="section-head" style="margin-bottom:10px"><div><h3 style="margin:0;font-size:18px">Evidence chain</h3><p class="small">Source, type and limitations remain inspectable. A user-drawn boundary is saved as field geometry; current NASA POWER/AppEEARS point adapters sample the field centre, not a polygon-wide average.</p></div><button class="ghost" onclick="openEvidenceAll()">Inspect all evidence</button></div><div class="evidence-list" id="evidenceList"><div class="muted small">No evidence loaded yet.</div></div></div>
 </div></section>
 
 <section class="section" id="priority-section"><div class="container">
@@ -442,16 +442,41 @@ function isMymensinghPilot(){return Math.abs(Number(qs('#lat').value)-24.75)<=.1
 function soilPayload(){const soil={};for(const [key,id] of [['ph','soil-ph'],['soc_pct','soil-soc'],['sand_pct','soil-sand'],['silt_pct','soil-silt'],['clay_pct','soil-clay']]){const raw=qs(`#${id}`).value.trim();if(raw!=='')soil[key]=Number(raw)}const texture=['sand_pct','silt_pct','clay_pct'];const count=texture.filter(k=>soil[k]!==undefined).length;if(count>0&&count<3)throw Error('For soil texture, enter sand, silt, and clay together.');if(count===3){const total=soil.sand_pct+soil.silt_pct+soil.clay_pct;if(total<98||total>102)throw Error('Sand, silt, and clay should total approximately 100%.')}return {soil,source:Object.keys(soil).length?qs('#soil-source').value:'not-provided'}}
 function updateSoilState(){const s=soilPayload();const n=Object.keys(s.soil).length;qs('#soilState').textContent=n?`${n} field soil value${n===1?'':'s'} will be used; source: ${s.source==='soil-test'?'soil-test report':'farmer estimate'}. Missing values remain estimates or unknown.`:isMymensinghPilot()?'Using Mymensingh pilot soil estimates for blank fields; enter local values to override them.':'No local soil values entered. Mymensingh values will not be applied to this location; missing soil evidence will be labeled.';const lat=Number(qs('#lat').value),lon=Number(qs('#lon').value);qs('#fieldState').textContent=isMymensinghPilot()?'Mymensingh pilot coordinates. You can move the field marker; NASA POWER will query the selected point.':`NASA POWER will query ${lat.toFixed(4)}, ${lon.toFixed(4)} when available. Crop and soil recommendations outside Mymensingh are not locally validated.`}
 function useDemoInputs(){qs('#lat').value='24.7500';qs('#lon').value='90.4100';qs('#area').value='0.4';qs('#water').value='900';qs('#reliability').value='80';qs('#budget').value='100000';qs('#labour').value='120';qs('#previous').value='Rice';for(const id of ['soil-ph','soil-soc','soil-sand','soil-silt','soil-clay'])qs(`#${id}`).value='';qs('#soil-source').value='farmer-estimate';updateSoilState();updateRangeLabels();resetMap();toast('Mymensingh demo field loaded')}
-function fieldPayload(){const soilData=soilPayload();return {field_id:'fieldshift_web',lat:Number(qs('#lat').value),lon:Number(qs('#lon').value),area_ha:Number(qs('#area').value),land_type:'medium highland',previous_crop:qs('#previous').value,soil:soilData.soil,soil_data_source:soilData.source,farmer:{water_available_mm_season:Number(qs('#water').value),irrigation_reliability:Number(qs('#reliability').value)/100,budget_bdt_ha:Number(qs('#budget').value),labour_available_person_days_ha:Number(qs('#labour').value)}}}
+function fieldPayload(){
+  const soilData=soilPayload();
+  if(state.drawMode)throw Error('Finish the field boundary or reset it before running the analysis.');
+  const reliabilityPct=Number(qs('#reliability').value);
+  if(!Number.isFinite(reliabilityPct)||reliabilityPct<30||reliabilityPct>100)throw Error('Choose an irrigation reliability between 30% and 100%.');
+  const polygon=state.boundaryPoints.length>=3
+    ? state.boundaryPoints.map(point=>[Number(point[0]),Number(point[1])])
+    : null;
+  return {
+    field_id:'fieldshift_web',
+    lat:Number(qs('#lat').value),
+    lon:Number(qs('#lon').value),
+    area_ha:Number(qs('#area').value),
+    land_type:'medium highland',
+    previous_crop:qs('#previous').value,
+    soil:soilData.soil,
+    soil_data_source:soilData.source,
+    ...(polygon?{polygon}:{}),
+    farmer:{
+      water_available_mm_season:Number(qs('#water').value),
+      irrigation_reliability:reliabilityPct/100,
+      budget_bdt_ha:Number(qs('#budget').value),
+      labour_available_person_days_ha:Number(qs('#labour').value)
+    }
+  };
+}
 async function previewField(){try{const r=await fetch('/api/field/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({field:fieldPayload()})});const d=await r.json();if(!r.ok)throw Error(d.detail||'Field preview failed');toast(`Field inputs ready · ${num(d.field.area_ha,1)} ha`)}catch(e){toast(e.message)}}
 function selectedPriorities(){return Array.from(state.priorities)}
 function togglePriority(btn){const c=btn.dataset.choice;if(state.priorities.has(c)){if(state.priorities.size<=1){toast('Keep at least one priority active');return}state.priorities.delete(c)}else state.priorities.add(c);btn.classList.toggle('active',state.priorities.has(c));renderPrioritySummary()}
 function renderPrioritySummary(){const names={water:'water',soil:'soil',income:'income',yield:'yield',labour:'labour',risk:'climate risk'};const list=selectedPriorities().map(x=>names[x]);qs('#prioritySummary').textContent=`Your active priorities are ${list.join(', ')}. FieldShift will translate them into model weights, then expose the trade-offs rather than hiding them behind a single number.`;renderWeights();}
 function renderWeights(){const choices=selectedPriorities();const weights={};choices.forEach(k=>weights[k]=1/choices.length);const html=choices.map(k=>`<div class="weight-line"><span>${k}</span><div class="bar"><i style="width:${Math.round(weights[k]*100)}%"></i></div><b>${Math.round(weights[k]*100)}%</b></div>`).join('');qs('#weightPreview').innerHTML=`<div class="small" style="color:#d6e3db;margin-bottom:6px">Priority blend preview · the scientific engine then maps these choices to model dimensions.</div>${html}`}
 function toggleAdvancedWeights(){const el=qs('#advancedWeights');el.classList.toggle('hidden');if(!el.classList.contains('hidden'))el.innerHTML='<div class="small muted" style="line-height:1.55">Advanced weighting is intentionally secondary. The guided choices above are the primary interaction; the scientific engine receives explicit dimension weights after the choices are translated.</div>'}
-async function startDemo(){
+async function startDemo(resetInputs=true){
   stopEvidenceRefresh();state.lastPayload=null;qs('#pending-evidence').classList.add('hidden');
-  setStep('field');useDemoInputs();
+  setStep('field');if(resetInputs)useDemoInputs();
   try{const r=await fetch('/api/demo');const d=await r.json();if(!r.ok)throw Error(d.detail||'Demo failed');applyData(d);scrollToId('evidence-section');toast('Reproducible Mymensingh demo loaded')}
   catch(e){toast(e.message)}
 }
@@ -510,7 +535,11 @@ async function submitAnalysis(payload,isRefresh=false){
       if(version!==state.pollVersion)return;
       state.currentQueuedRunId=queuedData.run.id;state.workerPollAttempts=0;
       hideResultPanelsUntilReady();
-      qs('#evidence-window').textContent='Requested observations: '+payload.start_date+' to '+payload.end_date+'. The run is stored in My Runs.';
+      qs('#evidence-window').textContent='Requested observations: '+payload.start_date+' to '+payload.end_date+
+        '. Field centre: '+Number(payload.field.lat).toFixed(4)+', '+Number(payload.field.lon).toFixed(4)+
+        '; area: '+Number(payload.field.area_ha).toFixed(3)+' ha'+
+        '; irrigation reliability submitted: '+Math.round(Number(payload.field.farmer.irrigation_reliability)*100)+'%'+
+        '; boundary: '+(payload.field.polygon?'custom polygon saved':'centre point only')+'. Stored in My Runs.';
       showQueuedRun(queuedData.run,'Analysis request saved. A server-side worker will check NASA datasets and update this run automatically—even if you close this page.');
       scrollToId('evidence-section');toast('Analysis safely queued. Background processing started.');
       pollQueuedRun(state.currentQueuedRunId,version,0);return;
@@ -528,8 +557,10 @@ async function submitAnalysis(payload,isRefresh=false){
 async function runAnalysis(){
   if(state.analysisBusy)return;
   try{
+    const selectedField=fieldPayload();
+    const observationRange=dateRangePayload();
     state.clientRequestId=newClientRequestId();
-    const payload={client_request_id:state.clientRequestId,field:fieldPayload(),...dateRangePayload(),priority_choices:selectedPriorities(),n_uncertainty_samples:24,n_weight_samples:80};
+    const payload={client_request_id:state.clientRequestId,field:selectedField,...observationRange,priority_choices:selectedPriorities(),n_uncertainty_samples:24,n_weight_samples:80};
     stopEvidenceRefresh();state.pendingAttempts=0;state.lastPayload=payload;setStep('field');
     await submitAnalysis(payload);
   }catch(e){toast(e.message)}
@@ -632,7 +663,7 @@ function downloadReport(){if(!state.data){toast('Run an analysis first');return}
 function printReport(){if(!state.data){toast('Run an analysis first');return}window.print()}
 function applyPrintStyles(){const st=document.createElement('style');st.textContent='@media print{.topbar,.hero-actions,.hero-note,.hero-visual,.trust-strip,.stepper,.section-tools,.map-card,.priority-layout,.footer,.drawer,.toast{display:none!important}.section{padding:15px 0}.surface,.metric-card{box-shadow:none!important}.container{width:100%}body{background:#fff}.report{grid-template-columns:1fr}.report-hero{break-inside:avoid}}';document.head.appendChild(st)}
 function showFallbackMap(){if(typeof L==='undefined'){qsa('.hero-visual,.map-card').forEach(el=>el.style.background='linear-gradient(135deg,#dce7de,#d4dfd6)');}}
-window.addEventListener('DOMContentLoaded',async()=>{for(const id of ['start-date','end-date']){qs(`#${id}`).max=new Date().toISOString().slice(0,10);qs(`#${id}`).addEventListener('input',()=>{qs('#date-preset').value='custom';stopEvidenceRefresh();try{dateRangePayload()}catch{}})}qs('#date-preset').addEventListener('change',()=>{stopEvidenceRefresh();setDatePreset()});setDatePreset();initMaps();updateRangeLabels();for(const id of ['soil-ph','soil-soc','soil-sand','soil-silt','soil-clay','soil-source','lat','lon'])qs(`#${id}`).addEventListener('input',()=>{try{updateSoilState()}catch(e){qs('#soilState').textContent=e.message}});updateSoilState();renderPrioritySummary();applyPrintStyles();showFallbackMap();if('serviceWorker' in navigator)navigator.serviceWorker.register('/static/sw.js').catch(()=>{});await initAccount();startDemo();});
+window.addEventListener('DOMContentLoaded',async()=>{for(const id of ['start-date','end-date']){qs(`#${id}`).max=new Date().toISOString().slice(0,10);qs(`#${id}`).addEventListener('input',()=>{qs('#date-preset').value='custom';stopEvidenceRefresh();try{dateRangePayload()}catch{}})}qs('#date-preset').addEventListener('change',()=>{stopEvidenceRefresh();setDatePreset()});setDatePreset();initMaps();updateRangeLabels();for(const id of ['soil-ph','soil-soc','soil-sand','soil-silt','soil-clay','soil-source','lat','lon'])qs(`#${id}`).addEventListener('input',()=>{try{updateSoilState()}catch(e){qs('#soilState').textContent=e.message}});updateSoilState();renderPrioritySummary();applyPrintStyles();showFallbackMap();if('serviceWorker' in navigator)navigator.serviceWorker.register('/static/sw.js').catch(()=>{});await initAccount();startDemo(false);});
 </script>
 </body>
 </html>
