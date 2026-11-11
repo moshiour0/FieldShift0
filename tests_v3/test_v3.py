@@ -446,7 +446,7 @@ class TestV3Engine(unittest.TestCase):
             invalid.validate()
 
     def test_drive_archive_credentials_allow_smap_cache_but_never_live_gee_without_gee_auth(self):
-        from fieldshift.v3 import pipeline
+        from fieldshift.v3 import gee, pipeline
         from fieldshift.v3.appeears import AppEEARSResult
 
         with tempfile.TemporaryDirectory() as cache_dir, patch.dict(
