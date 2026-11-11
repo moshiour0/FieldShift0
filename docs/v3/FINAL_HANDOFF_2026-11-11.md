@@ -195,3 +195,40 @@ The default `main` branch is currently **not protected** and has no required sta
 - PR CI run #636 (`42968480158`) passed Python 3.11 and 3.12: **187 passed per job**, one existing Starlette/httpx TestClient deprecation warning per job; Ruff, compileall and mypy passed in both matrices.
 - The final documentation consolidation changes no application runtime, database function, provider credentials, workflow dispatch, or Production setting.
 - PR #1 remains Draft/Open/Unmerged; PR #2/#3 remain Draft/Open/Unmerged; no Production deployment or main merge is authorized by this handoff.
+
+
+## 13. Email sign-in redirect incident and zero-cost guardrails — 11 November 2026
+
+### What the live evidence says
+
+- The only Supabase organization `moshiour's Org` is on the **Free** plan (`tier_free`). No plan upgrade, paid add-on, SMTP purchase, domain purchase or billing action was performed.
+- A privacy-preserving aggregate query of `auth.users` returned: **1 user total, 1 email-confirmed, 1 with a recorded sign-in timestamp**. No email address or user identifier was retrieved. The user account was created and confirmed, and Supabase has recorded a sign-in event; this does not prove the browser retained a FieldShift session because the email callback opened `localhost:3000`.
+- The FieldShift browser code already constructs the OTP `redirect_to` from the current page's `window.location.origin` and `pathname`. The likely remaining fault is Supabase Auth URL Configuration: `Site URL` is still the default `http://localhost:3000`, or the current Vercel redirect URL is not in the allowlist. When a redirect is absent/invalid, Supabase falls back to Site URL.
+- The latest Preview stable branch alias is `https://field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app`; latest exact deployment URL is `https://field-shift0-dprqqtf6d.vercel.app`.
+- The available Supabase connection can inspect project metadata and query the database but does not expose the hosted Auth URL Configuration mutation. The operator must set the Site URL and Redirect URLs in the Supabase Dashboard; no SQL workaround or Vercel environment edit can replace that setting.
+- The latest application callback UX now displays an explicit success toast only after `/api/auth/me` validates the returned session, and displays a clear error when an email callback returns without a valid session. It does not treat email delivery or a redirect alone as proof of sign-in.
+- Callback UX correction commit: `141d1366a341b757efa23280458758895c73adab`. Exact Preview deployment `dpl_3FZNqo9LFNEMHu4ecNdQk3f3GBkR` is READY. PR CI run #640 (`42978142579`) passed Python 3.11 and 3.12: **187 passed per job**, one existing Starlette/httpx TestClient deprecation warning; Ruff, compileall and mypy passed.
+
+### Operator action to fix redirects
+
+Open Supabase Dashboard → Authentication → URL Configuration for project `bipyrlegaxmhwzwrmcmi`:
+
+- Temporary **Site URL** for the current feature Preview:
+  `https://field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app`
+- Add this **Redirect URL**:
+  `https://field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app/**`
+- Also allow the current immutable deployment if testing from it:
+  `https://field-shift0-dprqqtf6d.vercel.app/**`
+- Save settings. Open the stable branch alias above (not `localhost` and not the older Production domain), choose Sign in, and request one fresh magic link. Do not re-register; the existing email-confirmed account is already present. Use the newest link once.
+- On success the header changes to `My Runs` and the new callback toast says the session was verified. If the callback still fails, capture the visible error and current URL without sharing the email token or hash.
+
+This is a temporary Preview Site URL. Before a future Production release, change the Site URL to the verified Production domain and keep the Preview alias as an additional allowlisted Redirect URL.
+
+### No-cost policy
+
+- Supabase organization is verified Free. Built-in Supabase Auth SMTP is included without a separate email bill, but the current built-in service sends at most **2 messages per hour per project** and only to addresses that belong to the Supabase organization team. It is best-effort/testing infrastructure, not a public production mail service. A custom SMTP service may have its own free limits or charges; none was configured by this work.
+- Free Supabase plan quota includes 50,000 Monthly Active Users; stay within the Free plan quotas for database, storage and egress. Projects may pause after seven days of inactivity; a pause does not create a paid charge.
+- Google Earth Engine is free only for eligible noncommercial/research/education use registered as noncommercial. A billing account is not required for noncommercial use. Commercial/operational/fee-for-service use requires a paid Earth Engine configuration; other enabled Google Cloud services can still incur charges. Do not run the SMAP/GPM/NEX Earth Engine jobs until the owner verifies that the Cloud project is registered as noncommercial and no paid Google Cloud billing/services are enabled. If the intended use is commercial, keep Earth Engine paths disabled under the strict $0 requirement.
+- NASA POWER and NASA AppEEARS are used as public NASA data services; keep within their fair-use/provider limits. Google Drive storage must remain within the account's no-cost quota.
+- The Vercel team plan was not exposed by the connected read interface, and the billing-charges endpoint returned `costs_not_found`; therefore no claim is made about the user's Vercel subscription or historical charges. No Vercel purchase, promotion, billing setting or paid service was changed by this task.
+- User reports that the six GitHub Actions secrets have been added. Secret values are intentionally not readable through the connected GitHub interface. Workflow preflight is the authoritative operational validation; no workflow was dispatched by this task.

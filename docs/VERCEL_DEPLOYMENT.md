@@ -59,3 +59,18 @@ Before the GitHub/Vercel release, the connector layer was smoke-tested externall
 The V3.3 signed-in dashboard does not depend on process-local state for saved runs. The browser submits a request to `POST /api/analysis/queue`; Supabase stores the immutable request and idempotency key, and the scheduled worker processes one leased job at a time. Owners list and restore analyses through `GET /api/account/runs` and `GET /api/account/runs/{run_id}`. Manual owner recheck uses `POST /api/account/runs/{run_id}/recheck`.
 
 The feature-branch Preview variables are scoped to `feat/krishinexus-real-data-school-lab`. At the current handoff, they are not provisioned for Production. Do not copy the Preview Supabase URL/token into Production without an explicit environment/database plan; use a separately provisioned Production Supabase project and its own migrations, Auth redirect allowlist, worker token and five-minute schedule before promotion. The public Supabase email sender is restricted; configure custom SMTP before allowing public sign-ups. See the Final Owner Handoff for the current acceptance and release gate.
+
+
+## Fix the Supabase email redirect before testing Sign in
+
+The browser code sends the current Vercel origin as the Supabase `redirect_to`. Do not hardcode localhost in Vercel. The Supabase Auth URL Configuration controls whether that redirect is allowed and where confirmation emails fall back when it is not.
+
+For the current feature Preview only, set Supabase Dashboard → Authentication → URL Configuration:
+
+- Site URL: `https://field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app`
+- Redirect URL: `https://field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app/**`
+- Optional exact deployment URL: `https://field-shift0-dprqqtf6d.vercel.app/**`
+
+Save the settings, open the stable Preview alias above, then request one fresh email link. The existing verified Supabase user should sign in; do not create another account. Successful callback now displays a session-verified toast only after the backend's `/api/auth/me` validation. Before Production release, change Site URL to the verified Production domain.
+
+The Supabase project organization is verified on Free. Default Auth SMTP is included, but is capped at 2 messages/hour and only sends to organization-team addresses. Do not add custom SMTP or upgrade while enforcing a strict $0 budget. Google Earth Engine may only be used for eligible registered noncommercial/research use without a paid billable setup; do not dispatch SMAP/GPM/NEX Earth Engine workflows until its noncommercial registration and Google Cloud billing state are confirmed.

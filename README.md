@@ -2,7 +2,7 @@
 
 # FieldShift V3.3 / KrishiNexus — NASA-informed agricultural decision support
 
-> **Current owner handoff (11 November 2026):** See the [Final Handoff](docs/v3/FINAL_HANDOFF_2026-11-11.md) for the verified V3.3 runtime correction `9adacb90cf06d2745226b39096bd46fe46de3ac4`, READY runtime Preview, latest 187-test CI evidence and Preview database corrections. The worker now writes audit events before lease release and preserves `preliminary_ready` when only optional evidence remains pending. Python 3.11/3.12 CI passed 187 tests per job; Ruff, compileall and mypy also pass. PR #1 remains Draft/Open/Unmerged; Production remains on the older process-memory baseline.
+> **Current owner handoff (11 November 2026):** See the [Final Handoff](docs/v3/FINAL_HANDOFF_2026-11-11.md) for verified V3.3 runtime correction `9adacb90cf06d2745226b39096bd46fe46de3ac4`, latest email callback fix `141d1366a341b757efa23280458758895c73adab`, READY Preview, 187-test CI evidence and the zero-cost Auth redirect runbook. The worker now writes audit events before lease release and preserves `preliminary_ready` when only optional evidence remains pending. Python 3.11/3.12 CI passed 187 tests per job; Ruff, compileall and mypy also pass. PR #1 remains Draft/Open/Unmerged; Production remains on the older process-memory baseline.
 
 > **Access boundary:** Public `/api/analysis/{run_id}` read routes return only the static `demo_mymensingh_v3` snapshot. Live user runs are retrieved only through the bearer-authenticated, owner-scoped `/api/account/runs` endpoints. Live analyses are not retained in a process-global cache. The compatibility what-if route uses the caller's submitted field snapshot and does not load a different live run by ID.
 
