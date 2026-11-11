@@ -57,16 +57,24 @@ class TestAnalysisWorker(unittest.TestCase):
                 ]
             },
         }
-        with patch(
-            "fieldshift.api.analysis_worker._rest_json",
-            return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "retrying"},
-        ) as save:
+        with (
+            patch(
+                "fieldshift.api.analysis_worker._rest_json",
+                return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "retrying"},
+            ) as save,
+            patch(
+                "fieldshift.api.analysis_worker.supabase_auth.archive_result_payload",
+                return_value={"storage_provider": "google_drive", "archive_object_key": "analysis-results/run-123/result.json"},
+            ) as archive,
+        ):
             analysis_worker._save_result("job-1", engine_result, "w" * 56)
 
         payload = save.call_args.kwargs["payload"]
         self.assertEqual(payload["p_run"]["status"], "preliminary_ready")
         self.assertEqual(payload["p_result"]["result_kind"], "preliminary")
-        saved_run = payload["p_result"]["result_payload"]["run"]
+        self.assertEqual(payload["p_result"]["result_payload"]["storage_provider"], "google_drive")
+        self.assertEqual(archive.call_args.kwargs["storage_key"], "run-123")
+        saved_run = archive.call_args.args[0]["run"]
         self.assertEqual(saved_run["status"], "preliminary_ready")
         self.assertFalse(saved_run["is_final"])
         self.assertIn("Optional evidence is still processing", saved_run["status_message"])
@@ -82,14 +90,21 @@ class TestAnalysisWorker(unittest.TestCase):
                 {"source_key": "nasa_smap", "name": "NASA SMAP", "required": False, "status": "available"},
             ]},
         }
-        with patch(
-            "fieldshift.api.analysis_worker._rest_json",
-            return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "retrying"},
-        ) as save:
+        with (
+            patch(
+                "fieldshift.api.analysis_worker._rest_json",
+                return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "retrying"},
+            ) as save,
+            patch(
+                "fieldshift.api.analysis_worker.supabase_auth.archive_result_payload",
+                return_value={"storage_provider": "google_drive", "archive_object_key": "analysis-results/run-123/result.json"},
+            ) as archive,
+        ):
             analysis_worker._save_result("job-1", engine_result, "w" * 56)
         payload = save.call_args.kwargs["payload"]
         self.assertEqual(payload["p_run"]["status"], "waiting_for_data")
-        self.assertFalse(payload["p_result"]["result_payload"]["run"]["is_final"])
+        self.assertEqual(payload["p_result"]["result_payload"]["storage_provider"], "google_drive")
+        self.assertFalse(archive.call_args.args[0]["run"]["is_final"])
         self.assertIn("Required evidence is still pending", payload["p_run"]["status_message"])
 
     def test_final_result_without_pending_providers_remains_final(self) -> None:
@@ -102,16 +117,23 @@ class TestAnalysisWorker(unittest.TestCase):
             },
             "evidence": {"items": [{"source_key": "nasa_power", "name": "NASA POWER", "status": "available"}]},
         }
-        with patch(
-            "fieldshift.api.analysis_worker._rest_json",
-            return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "succeeded"},
-        ) as save:
+        with (
+            patch(
+                "fieldshift.api.analysis_worker._rest_json",
+                return_value={"run_id": "11111111-2222-4333-8444-555555555555", "job_status": "succeeded"},
+            ) as save,
+            patch(
+                "fieldshift.api.analysis_worker.supabase_auth.archive_result_payload",
+                return_value={"storage_provider": "google_drive", "archive_object_key": "analysis-results/run-123/result.json"},
+            ) as archive,
+        ):
             analysis_worker._save_result("job-1", engine_result, "w" * 56)
 
         payload = save.call_args.kwargs["payload"]
         self.assertEqual(payload["p_run"]["status"], "final_ready")
         self.assertEqual(payload["p_result"]["result_kind"], "final")
-        self.assertTrue(payload["p_result"]["result_payload"]["run"]["is_final"])
+        self.assertEqual(payload["p_result"]["result_payload"]["storage_provider"], "google_drive")
+        self.assertTrue(archive.call_args.args[0]["run"]["is_final"])
 
 
     def test_source_records_persist_shared_archive_provenance(self) -> None:
