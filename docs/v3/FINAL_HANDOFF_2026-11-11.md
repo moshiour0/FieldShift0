@@ -4,9 +4,9 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR #1:** [Open · Draft · Unmerged · Mergeable](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Current reviewed feature head:** `f0103f57590377051b74bb054e690db884125a82`  
-**Exact-head Preview:** https://field-shift0-hsqscngyc.vercel.app  
-**Preview deployment:** `dpl_2zf4cBooH5YUBYLP29ayngycfbp5`  
+**Current reviewed feature head:** `9adacb90cf06d2745226b39096bd46fe46de3ac4`  
+**Exact-head Preview:** https://field-shift0-e4qwww1wl.vercel.app  
+**Preview deployment:** `dpl_37RcoXzaANYhit4CDtaDiV94qQMD`  
 **Supabase Preview project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · `ap-south-1`  
 **Production:** deliberately not promoted; see the separate Production status below.
 
@@ -144,3 +144,33 @@ A second worker lease/RLS ordering defect was identified during a source-level r
 3. Dispatch the 2025 nine-point SMAP pilot after PR #2's workflow registration is approved and merged to the default branch; validate every daily interval, both soil-moisture bands, private Drive read-back and SHA-256. The manual POWER history workflow already on `main` can backfill 2016–2024 against the feature branch; confirm exact per-year coverage before claiming ten-year daily history.
 4. Complete Bangladesh crop-calendar, soil, yield/price and field-trial calibration with qualified agronomist review. The crop/soil recommendations remain a Mymensingh pilot.
 5. Provision and validate a separate Production Supabase/Auth/worker environment, migration history, redirect allowlist, secrets and scheduled worker. Keep Production unchanged until those gates pass and the owner explicitly approves release.
+
+
+---
+
+## 9. Required-vs-optional pending regression correction — 11 November 2026, 05:37 UTC
+
+A further database/source comparison found that the full-function replacement in migration `20261111040447_worker_event_before_lease_release_v2` had restored the older unconditional retry mapping in `worker_save_analysis()`. Python correctly sent `preliminary_ready` when only optional satellite evidence was pending, but the database overwrote it with `waiting_for_data`. This contradicted the documented product contract and hid a useful preliminary result even though the worker had computed one.
+
+### Corrective migration and regression protection
+
+- Applied additive Preview migration `20261111052954_worker_preserve_preliminary_status_with_active_lease`.
+- The live function now preserves `preliminary_ready` when `p_retry_at` is set and Python sends `p_run.status=preliminary_ready`. Required-source pending runs remain `waiting_for_data`. Pending runs remain non-final, keep `completed_at=NULL`, store a `preliminary` result revision and retain the retry.
+- The replacement is based on the active Preview function and retains its worker-token comparison, active lease validation, RLS-authorized audit event before queue lease release, source persistence, evidence fingerprinting and result revision behavior.
+- Added branch migration `supabase/migrations/20261111052954_worker_preserve_preliminary_status_with_active_lease.sql` and regression tests in `tests/test_worker_status_migration.py`.
+- Live SQL read-back confirms: `preliminary_ready` branch exists; the audit event insert precedes the job update that clears the lease; the separate failure handler also writes its event before releasing the lease.
+- The five-minute `fieldshift-analysis-worker` schedule remains exactly one active job. No test run, synthetic user or analysis row was inserted; all seven inspected persistence/cache tables remain empty.
+- Final regression commit for this correction: `9adacb90cf06d2745226b39096bd46fe46de3ac4`.
+- PR CI run #619 (`42966807479`) passed Python 3.11 and 3.12: **187 passed, 1 existing Starlette/httpx TestClient deprecation warning per job**. `compileall`, Ruff and mypy (34 source files) passed in both jobs.
+- Exact-head Vercel Preview `dpl_37RcoXzaANYhit4CDtaDiV94qQMD` is READY with Git SHA `9adacb90cf06d2745226b39096bd46fe46de3ac4`. Vercel runtime error aggregation found no errors in the selected 24-hour window. Direct public HTTP endpoint validation could not be performed because the Preview hostname is protected/inaccessible to the available web request path; READY metadata is not represented as an HTTP smoke test.
+
+### Current end-to-end boundary
+
+- PR #1 remains Open / Draft / Unmerged and GitHub reports it mergeable. PR #2 and #3 also remain Draft/Open/Unmerged.
+- Production remains on `main` deployment `dpl_B2hHCWQqkkuPW9HzWtFECpgGWfMX`, commit `c84c9aa7a52eb74b64e7caaba09989ce80e4e273`, product 3.1.3, `process_memory`, and no `/api/auth/config`. Supabase/worker variables are Preview-only. No Production alias, environment or database was changed.
+- GitHub default branch `main` currently contains only `.github/workflows/ci.yml` and `.github/workflows/history-backfill.yml`. The SMAP registration (PR #2) and weekly refresh registration (PR #3) remain outside `main`, so neither action is dispatchable/scheduled from the default branch yet. The connected GitHub tool can inspect Actions but does not expose `workflow_dispatch`; no workflow was dispatched and no Action secret value was read.
+- 2025 NASA POWER daily coverage remains complete at the nine representative points. 2016–2024 daily coverage remains unverified; SMAP/HLS/MODIS MOD16/GPM archive status remains `not_archived`. The 2025 SMAP pilot and live AppEEARS/GEE task-resume flow are still unverified.
+- Owner-controlled Magic Link account creation, queue submission, My Runs restoration and two-account isolation remain untested. No human account credentials/session were supplied. Public email sign-up still needs a custom SMTP provider.
+- Bangladesh crop calendar, soil, yield/price and field-trial calibration remain open; this is still a Mymensingh pilot, not a nationwide-calibrated agronomy service.
+
+**Release decision:** the exact feature Preview, CI and Preview database function contracts are now verified at commit `9adacb9`. The whole project is still **not Production-ready** until real account/provider/archive acceptance and separate Production Supabase/Auth/worker provisioning are completed.
