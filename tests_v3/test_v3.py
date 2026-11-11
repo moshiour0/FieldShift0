@@ -445,7 +445,7 @@ class TestV3Engine(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"invalid latitude/longitude"):
             invalid.validate()
 
-    def test_drive_archive_credentials_do_not_route_smap_away_from_appeears(self):
+    def test_drive_archive_credentials_allow_smap_cache_but_never_live_gee_without_gee_auth(self):
         from fieldshift.v3 import pipeline
         from fieldshift.v3.appeears import AppEEARSResult
 
@@ -454,7 +454,7 @@ class TestV3Engine(unittest.TestCase):
             {"FIELD_SHIFT_APPEEARS_USER": "test-user", "FIELD_SHIFT_APPEEARS_PASSWORD": "test-password"},
         ), patch.object(pipeline, "gee_credentials_configured", return_value=False), patch.object(
             pipeline.google_drive, "configured", return_value=True
-        ), patch.object(pipeline, "smap_daily_point_timeseries") as gee_smap, patch.object(
+        ), patch.object(pipeline, "smap_daily_point_timeseries") as smap_cache, patch.object(
             pipeline,
             "appeears_point_timeseries",
             return_value=AppEEARSResult((), ({
@@ -464,6 +464,10 @@ class TestV3Engine(unittest.TestCase):
                 "coverage": "AppEEARS SMAP sample",
             },)),
         ) as appeears_sample:
+            smap_cache.return_value = gee.SMAPPointResult(
+                rows=(), status="unavailable", coverage_fraction=0.0,
+                retrieval_mode="cache_miss", archive_cache_status="not_configured",
+            )
             field=build_field(load_config(),DEFAULT_WEIGHTS)
             datasets=[]
             pipeline._load_optional_remote(
@@ -471,7 +475,8 @@ class TestV3Engine(unittest.TestCase):
                 Path(cache_dir),allow_live=True,allow_live_smap=True,
             )
 
-        gee_smap.assert_not_called()
+        smap_cache.assert_called_once()
+        self.assertFalse(smap_cache.call_args.kwargs["allow_live_query"])
         appeears_sample.assert_called_once()
         self.assertIsNone(appeears_sample.call_args.kwargs.get("source_keys"))
         smap=next(item for item in datasets if item.get("name")=="NASA SMAP")
