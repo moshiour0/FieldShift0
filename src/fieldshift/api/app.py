@@ -347,7 +347,7 @@ def integration_status() -> dict[str, Any]:
                 supabase_auth.settings()["configured"] and worker_is_configured() and google_drive.configured()
             ),
             "active_execution_durable_across_instances": bool(
-                supabase_auth.settings()["configured"] and worker_is_configured()
+                supabase_auth.settings()["configured"] and worker_is_configured() and google_drive.configured()
             ),
         },
     }
