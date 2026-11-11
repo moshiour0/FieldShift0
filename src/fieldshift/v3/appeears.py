@@ -746,6 +746,11 @@ def _hls_vi_value(value: float | None) -> float | None:
     """
     if value is None or not math.isfinite(value):
         return None
+    # NASA HLS-VI uses -9999 as its documented fill value. Reject known
+    # sentinel values before the integer scale-factor branch; otherwise -9999
+    # would be misread as a plausible physical index (-0.9999).
+    if value in {-9999.0, -19999.0, -32768.0, -16999.0, -999.0}:
+        return None
     if -1.0 <= value <= 1.0:
         return float(value)
     if value.is_integer() and -10000.0 <= value <= 10000.0:
