@@ -74,3 +74,10 @@ For the current feature Preview only, set Supabase Dashboard → Authentication 
 Save the settings, open the stable Preview alias above, then request one fresh email link. The existing verified Supabase user should sign in; do not create another account. Successful callback now displays a session-verified toast only after the backend's `/api/auth/me` validation. Before Production release, change Site URL to the verified Production domain.
 
 The Supabase project organization is verified on Free. Default Auth SMTP is included, but is capped at 2 messages/hour and only sends to organization-team addresses. Do not add custom SMTP or upgrade while enforcing a strict $0 budget. Google Earth Engine may only be used for eligible registered noncommercial/research use without a paid billable setup; do not dispatch SMAP/GPM/NEX Earth Engine workflows until its noncommercial registration and Google Cloud billing state are confirmed.
+
+
+## Strict $0 Earth Engine guard
+
+Earth Engine is disabled in the V3.3 code by default. Setting `FIELD_SHIFT_GEE_PROJECT` and `FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON` is no longer sufficient. The app and SMAP archive scripts also require `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` after the owner has verified eligibility for Google's noncommercial/research use and confirmed there are no paid Cloud services/billing that could create charges. The SMAP Actions workflow checks the corresponding Repository Actions Variable and stops before requests if it is absent.
+
+For strict no-cost operation, leave that flag absent. Do not register the project as commercial, add a payment method or enable billable Cloud services. If later verified as eligible noncommercial, add the opt-in separately to Vercel Preview and GitHub Actions Variables; never copy it into Production automatically. The two GEE credential variables are currently Preview-only and removed from Vercel Production.

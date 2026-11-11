@@ -232,3 +232,26 @@ This is a temporary Preview Site URL. Before a future Production release, change
 - NASA POWER and NASA AppEEARS are used as public NASA data services; keep within their fair-use/provider limits. Google Drive storage must remain within the account's no-cost quota.
 - The Vercel team plan was not exposed by the connected read interface, and the billing-charges endpoint returned `costs_not_found`; therefore no claim is made about the user's Vercel subscription or historical charges. No Vercel purchase, promotion, billing setting or paid service was changed by this task.
 - User reports that the six GitHub Actions secrets have been added. Secret values are intentionally not readable through the connected GitHub interface. Workflow preflight is the authoritative operational validation; no workflow was dispatched by this task.
+
+
+## 14. Earth Engine zero-cost opt-in and production credential isolation — 11 November 2026
+
+### Code guard
+
+- Added an explicit `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` gate to `gee_credentials_configured()`. Project ID and service-account JSON alone no longer activate GEE. The opt-in must be set only after the owner has verified the Cloud project is registered for eligible noncommercial/research use and no paid Google Cloud services/billing will be used for this workload.
+- The same guard controls Preview App API GEE paths (including SMAP/GPM/NEX connectors) and the SMAP archive scripts.
+- The SMAP Actions workflow now also requires repository Actions Variable `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` in its preflight and ingest jobs. Without it, the workflow exits before any Earth Engine or NASA data request.
+- Vercel metadata showed `FIELD_SHIFT_GEE_PROJECT` and `FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON` were previously targeted to both Production and Preview. Both are now restricted to Preview and branch `feat/krishinexus-real-data-school-lab`; Production no longer receives these two GEE credentials. The secret values were not read or changed. This intentionally disables GEE in the old Production deployment to prevent an unverified billing path.
+- No GEE preflight, AppEEARS backfill, SMAP backfill or NASA workflow dispatch was executed after adding this gate. The variable is currently absent, so GEE remains disabled by default.
+
+### Verification
+
+- Added a regression test covering missing/false/true noncommercial opt-in and missing credentials.
+- Initial CI exposed six offline tests that mocked Earth Engine but did not declare their test-only eligibility; those fixtures now explicitly set the opt-in in their isolated test environment only.
+- Final CI run #646 (`42979897914`) passed Python 3.11 and 3.12: **188 passed per job**, one existing Starlette/httpx TestClient deprecation warning; Ruff, compileall and mypy passed.
+- Code/guard commit: `906b9950a64fd2fe3f6b6e0e1e82ab81b3898673`; test-fixture correction head: `2592f13b6dd20f64e6dff868f9227295d2337c62`.
+- Latest Preview deployment `dpl_H893y1UtTuvjNiycL5U378Gf83zY` is READY for the test-fixture correction SHA; stable branch alias remains `https://field-shif-git-c9816e-moshiour-rahman-sarkers-projects-2cebe363.vercel.app`.
+
+### Owner action only if eligible
+
+Do not set `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` until Google confirms the project is registered for noncommercial use and no paid Cloud products/billing will generate charges. If the project is used commercially/operationally/fee-for-service, leave the flag absent and keep GEE disabled under the strict $0 budget. No payment method or billing plan should be added for this purpose.
