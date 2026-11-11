@@ -1,13 +1,16 @@
 # KrishiNexus — Persistent Analysis, Delayed Data Recovery & User Accounts Roadmap
 
-> **Status:** Active implementation handoff  
-> **Last updated:** 2026-11-10 (Asia/Dhaka)  
+> **Status:** Released implementation record; operational acceptance gates remain  
+> **Last updated:** 2026-11-12 (Asia/Dhaka)  
 > **Repository:** moshiour0/FieldShift0  
-> **Working branch:** feat/krishinexus-real-data-school-lab  
-> **Pull request:** #1 — Draft / Open / Unmerged (do not merge without explicit approval)  
-> **Production rule:** Do not promote this feature branch to Production without explicit approval.
+> **Production branch:** `main`  
+> **Merged release:** PR #1 and PR #4; see current handoff  
+> **Production rule:** Production is already released. Do not follow earlier Preview-only deployment instructions.
 
-## 0. Latest operational checkpoint — 2026-11-10 15:40 UTC
+> **Current release status — 12 November 2026:** the project is released on `main` at `15b216b2d8379f4d18ccae0a5603739214e4ffac`; PR #4's Google Drive result archive and status-only polling changes are merged, and Production is READY. The earlier implementation notes below are retained as history. For current operational truth and remaining acceptance gates, follow [Final Owner Handoff — 12 November 2026](FINAL_HANDOFF_2026-11-12.md).
+
+
+## 0. Historical operational checkpoint — 2026-11-10 15:40 UTC (superseded by the current release status above)
 
 - Current PR head: `f4417bf5107d001fac848d549e709b620eda66c5` (documentation-only after runtime commit `f2baa301dc30fbe6dc71d7076a41a30336b57b76)); PR #1 is still Open/Draft/Unmerged.
 - Exact-head CI run #562 (`42846659223`) passed on Python 3.11 and 3.12: 178 tests per job, compileall, strict Ruff and mypy (34 source files).
