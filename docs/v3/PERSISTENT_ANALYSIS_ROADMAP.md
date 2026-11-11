@@ -708,3 +708,35 @@ The current Draft PR head now closes that gap:
 3. Re-trigger the same run after its retry delay. Confirm the worker loads those exact IDs, queries those exact AppEEARS tasks, and does not submit duplicate tasks; then verify revision 2 and updated source/event state.
 4. Test a real Magic Link owner sign-in, refresh, sign-out/sign-in, and two-account isolation after adding the branch Preview URL to the Supabase Auth redirect allowlist. A custom SMTP provider is still needed before public sign-ups.
 5. Keep PR #1 Draft/Open/Unmerged and Production unchanged until explicit release approval.
+
+
+---
+
+## 15. Preview SQL regression audit — 11 November 2026
+
+A full-function replacement for the worker lease/audit ordering fix unintentionally restored an older unconditional `retry_at → waiting_for_data` mapping. This contradicted Phase 1's required-vs-optional readiness contract: optional satellite evidence could remain pending while a useful preliminary result was available, but Postgres hid it as waiting for data.
+
+### Corrected Preview database state
+
+- Additive migration `20261111052954_worker_preserve_preliminary_status_with_active_lease` now preserves `preliminary_ready` when the Python worker sends that status with a retry time. Required pending evidence remains `waiting_for_data`.
+- Both paths retain `completed_at=NULL`, `result_kind=preliminary`, `is_final=false` and the durable retry while data is pending.
+- The corrective replacement retains the worker token/header comparison, active-lease check, source write grants, evidence fingerprint/revision logic and event-before-lease-release ordering.
+- The failure handler `worker_fail_analysis_job()` was separately corrected by `20261111050822_worker_fail_event_before_lease_release` so transient/terminal failure events are inserted before clearing the job lease.
+- Live SQL read-back verifies both functions' event-before-release ordering and token/lease checks. The canonical single five-minute cron is active.
+- Matching versioned SQL files and a regression test are committed on `feat/krishinexus-real-data-school-lab`.
+
+### Current code verification
+
+- Review commit: `9adacb90cf06d2745226b39096bd46fe46de3ac4`.
+- Exact Git SHA Preview: `https://field-shift0-e4qwww1wl.vercel.app`, deployment `dpl_37RcoXzaANYhit4CDtaDiV94qQMD`, READY.
+- PR CI run #619 (`42966807479`) passed Python 3.11 and 3.12 with **187 passed, 1 existing Starlette/httpx TestClient deprecation warning** in each matrix; compileall, Ruff and mypy passed.
+- The seven checked Supabase run/account/source/result/event/job/cache/profile tables remain empty. An owner-created run has not yet demonstrated the preliminary revision, later source completion or a real failure/retry transaction end-to-end.
+- PR #1 remains Draft/Open/Unmerged. Production remains on the older process-memory deployment without Supabase Auth/worker configuration. No Production deployment or database was changed.
+
+### Next gates (unchanged)
+
+1. Complete real owner Magic Link / queue / My Runs / two-account isolation tests on the exact Preview.
+2. Verify one real AppEEARS task creation, durable task-ID reuse and a later result revision without duplicate task submission.
+3. Register and dispatch the 2025 nine-point SMAP pilot only after PR #2 is approved/merged; require full QA and remote private Drive checksum read-back.
+4. Backfill and verify POWER daily history for 2016–2024; do not label monthly chart aggregates as daily coverage.
+5. Provision a separate Production Supabase/Auth/worker environment and pass the same account/queue gates before Production release.
