@@ -10,7 +10,7 @@
 **Supabase project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · Free · `ap-south-1`  
 **Superseded workflow PRs:** #2 and #3 closed; their workflow files are included in PR #1.
 
-> **Release status:** Production is live. Sections 1–14 below retain the earlier pre-release audit snapshots as historical context; whenever they conflict with the final release state, **Section 15 is authoritative**. Do not follow old Preview-only instructions in the historical sections.
+> **Historical release status:** Production was released on 11 November. This document preserves the dated audit timeline only. The latest operational status and authoritative acceptance gates are in [Final Owner Handoff — 12 November 2026](FINAL_HANDOFF_2026-11-12.md). Do not follow older pre-release or Preview-only instructions in this historical snapshot.
 >
 ## 1. Historical pre-release verification snapshot
 
