@@ -83,3 +83,11 @@ The Supabase project organization is verified on Free. Default Auth SMTP is incl
 Earth Engine is disabled in the V3.3 code by default. Setting `FIELD_SHIFT_GEE_PROJECT` and `FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON` is no longer sufficient. The app and SMAP archive scripts also require `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` after the owner has verified eligibility for Google's noncommercial/research use and confirmed there are no paid Cloud services/billing that could create charges. The SMAP Actions workflow checks the corresponding Repository Actions Variable and stops before requests if it is absent.
 
 For strict no-cost operation, leave that flag absent. Do not register the project as commercial, add a payment method or enable billable Cloud services. If later verified as eligible noncommercial, add the opt-in separately to Vercel Preview and GitHub Actions Variables; never copy it into Production automatically. The two GEE credential variables are currently Preview-only and removed from Vercel Production.
+
+
+## Egress-remediation Preview state — 11 November 2026
+
+For PR #4 (`fix/supabase-egress-drive-result-archive`), branch-scoped Preview variables `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` were added using the existing Production FieldShift0 Free project values. The Preview intentionally has no worker token, so it cannot claim Production jobs. The four Google Drive variables are already present as Preview + Production secrets. GitHub Actions ran a private Drive `put_object/get_object` SHA-256 round-trip and delete preflight successfully.
+
+Vercel rejected a further Preview deployment due the Free-plan `api-deployments-free-per-day` limit. Do not attempt to bypass it with another team/project, plan upgrade or alternate billing. Existing Preview deployments retain their original environment snapshot; they will not pick up the new branch-scoped Supabase variables until a new deployment is created. Production remains unchanged until PR review and a successful Production deployment.
+
