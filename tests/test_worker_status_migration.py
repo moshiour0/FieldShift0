@@ -3,18 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 
 
-MIGRATION = (
-    Path(__file__).resolve().parents[1]
-    / "supabase"
-    / "migrations"
-    / "20261111052954_worker_preserve_preliminary_status_with_active_lease.sql"
+MIGRATION_NAME = (
+    "20261111052954_worker_preserve_preliminary_status_with_active_lease.sql"
 )
 
 
 def _worker_save_function() -> str:
-    sql = MIGRATION.read_text(encoding="utf-8").lower()
+    migration_path = next(
+        (
+            parent / "supabase" / "migrations" / MIGRATION_NAME
+            for parent in Path(__file__).resolve().parents
+            if (parent / "supabase" / "migrations" / MIGRATION_NAME).is_file()
+        ),
+        None,
+    )
+    assert migration_path is not None, f"Could not locate {MIGRATION_NAME}"
+    sql = migration_path.read_text(encoding="utf-8").lower()
+
     start = sql.index("create or replace function public.worker_save_analysis")
-    end = sql.index("$function$;", start)
+    body_start = sql.index("as $function$", start) + len("as $function$")
+    end = sql.index("$function$", body_start)
     return sql[start:end]
 
 
