@@ -532,6 +532,15 @@ def test_hls_shared_cache_processing_version_invalidates_previous_unscaled_value
     assert identity["qa_processing_version"] == "fieldshift-appeears-qa-v2-hls-scale-range"
 
 
+def test_public_signin_help_uses_exact_production_redirect_not_preview_host():
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "https://field-shift0.vercel.app/" in response.text
+    assert "Preview host" not in response.text
+    assert "Production sign-in setup" in response.text
+
+
 def test_provider_error_redacts_secrets(monkeypatch):
     monkeypatch.setenv("FIELD_SHIFT_APPEEARS_PASSWORD", "secret-pass")
     value = safe_error(RuntimeError("HTTP 403 secret-pass Bearer abc user@example.com projects/private-project"))
