@@ -321,7 +321,14 @@ def _load_optional_remote(
                 }
                 datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
                 datasets.append(smap_record)
-                use_gee_smap = smap_result.status in {"available", "partial", "pending"}
+                use_gee_smap = (
+                    smap_result.status in {"available", "partial"}
+                    or (
+                        smap_result.status == "pending"
+                        and allow_live_smap
+                        and gee_credentials_configured()
+                    )
+                )
             except Exception as exc:
                 datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
                 datasets.append({
