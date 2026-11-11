@@ -102,11 +102,15 @@ An HTTP 200 alone is not proof of complete daily coverage. Inspect status, missi
 ## Free-cost controls and limitations
 
 - Google Drive storage consumes the quota of the Google account that authorizes OAuth. It does not use a service-account storage quota.
-- This adapter stores processed NASA POWER JSON, not raw satellite imagery.
+- This adapter stores processed NASA POWER JSON, QA-curated satellite product payloads and signed-in analysis result JSON. It does not ingest or archive raw satellite imagery unless a separately reviewed workflow explicitly implements that path.
 - Standard Google Drive API usage currently has no additional API-use charge. Google has announced usage thresholds and potential charges for usage above standard daily limits later in 2026. The nine-point climate archive is expected to remain far below normal transfer limits; monitor usage before large bulk transfers.
 - Keep the root folder private. The adapter requests `drive.file`, not broad access to all Drive files.
 - Refresh tokens can be revoked or expire. If OAuth access is revoked, rerun the bootstrap and replace all four secret values consistently.
-- Drive is private object storage, not a transactional database. Signed-in analysis runs, source states, result revisions and the analysis worker queue live in the FieldShift0 Supabase project (`bipyrlegaxmhwzwrmcmi`). The separate `POST /api/refresh-jobs` regional POWER refresh queue still requires `FIELD_SHIFT_JOBS_DSN`; do not confuse it with the authenticated analysis queue or connect an unrelated Supabase project.
+- Drive is private object storage, not a transactional database. It now holds full signed-in analysis result JSON under analysis-results/{run-or-request-uuid}/{sha256}.json, in addition to source archives. Supabase analysis_results.result_payload stores only the private Drive object key, SHA-256 and byte count for new revisions. The API verifies the SHA-256 when restoring a result. Old inline result payloads remain readable for backward compatibility; they are not bulk-migrated automatically.
+- Supabase is intentionally kept small: Auth identity/session validation, owner-scoped run/request metadata, compact source status, the current result pointer/reference, and the durable transactional job queue. Postgres remains necessary for atomic idempotency, owner RLS and job leasing; Google Drive is not used as a lock/queue database.
+- The browser now polls GET /api/account/runs/{run_id}/status, which returns only small run/source metadata. It does not read analysis_results. Full detail reads the single row referenced by latest_result_id (limit=1) and then fetches the private Drive object. Do not reintroduce select=* or retrieve every historical revision in a polling path.
+- The application does not mount or bulk-download the Drive parent folder. The adapter uses the restricted drive.file scope, resolves only the requested child folders/object, and never grants public file permissions.
+- The separate POST /api/refresh-jobs regional POWER refresh queue still requires FIELD_SHIFT_JOBS_DSN; do not confuse it with the authenticated analysis queue or connect an unrelated Supabase project.
 
 ## Scientific boundaries
 
@@ -116,3 +120,10 @@ NASA POWER values are gridded representative-point samples, not field sensors, d
 ## Worker status / lease regression correction — 11 November 2026
 
 The latest Preview SQL read-back confirms the required/optional evidence contract: optional-only pending evidence with worker status `preliminary_ready` remains preliminary, while required pending evidence stays `waiting_for_data`. Both `worker_save_analysis()` and `worker_fail_analysis_job()` append their audit event before clearing the active lease. The matching branch migrations are in `supabase/migrations/`; the exact review checkpoint and open Production/account/data gates are in the [Final Owner Handoff](v3/FINAL_HANDOFF_2026-11-11.md).
+
+
+## Supabase egress and result-storage control — 11 November 2026
+
+The organization-level usage page defaults to All projects, aggregating all projects and preview branches in the organization. It cannot attribute egress to FieldShift0 alone. Select each project/branch separately before deciding which application generated traffic. Do not pause/delete a project or change the organization plan as a first-line response.
+
+FieldShift0's status-polling path was specifically reduced: repeated polls read only owner-scoped run/source status; a full result is requested only when its latest_result_id changes or the final status transitions. Historical result revisions are not fetched during polling. Full analysis JSON is archived in private Google Drive with SHA-256 verification; Postgres retains a compact pointer and small transactional metadata.
