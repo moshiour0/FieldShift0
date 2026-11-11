@@ -24,6 +24,10 @@ class TestAPI(unittest.TestCase):
             "SUPABASE_URL": "https://example.supabase.co",
             "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
             "SUPABASE_ANON_KEY": "anon_test",
+            "GOOGLE_DRIVE_CLIENT_ID": "drive-client",
+            "GOOGLE_DRIVE_CLIENT_SECRET": "drive-secret",
+            "GOOGLE_DRIVE_REFRESH_TOKEN": "drive-refresh",
+            "GOOGLE_DRIVE_FOLDER_ID": "drive-folder",
             "FIELDSHIFT_WORKER_TOKEN": "",
             "FIELD_SHIFT_WORKER_SECRET": "x" * 48,
         }
@@ -58,6 +62,25 @@ class TestAPI(unittest.TestCase):
                 expected,
             )
 
+    def test_worker_durability_is_not_reported_when_drive_result_storage_is_missing(self):
+        c = TestClient(app)
+        env = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            "SUPABASE_ANON_KEY": "anon_test",
+            "FIELDSHIFT_WORKER_TOKEN": "w" * 56,
+            "GOOGLE_DRIVE_CLIENT_ID": "",
+            "GOOGLE_DRIVE_CLIENT_SECRET": "",
+            "GOOGLE_DRIVE_REFRESH_TOKEN": "",
+            "GOOGLE_DRIVE_FOLDER_ID": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            response = c.get("/api/status")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["account_storage"]["result_archive_provider"], "not_configured")
+        self.assertFalse(response.json()["analysis_state"]["completed_signed_in_runs_durable_across_instances"])
+        self.assertFalse(response.json()["analysis_state"]["active_execution_durable_across_instances"])
+
     def test_account_runs_requires_a_supabase_session(self):
         c = TestClient(app)
         response = c.get("/api/account/runs")
@@ -79,6 +102,113 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"runs": []})
         self.assertEqual(rest_select.call_args.kwargs["filters"]["user_id"], f"eq.{user_id}")
+
+    def test_account_run_status_requires_a_supabase_session(self):
+        c = TestClient(app)
+        response = c.get("/api/account/runs/628a9906-127d-46c7-af5b-b0e979e2ac42/status")
+        self.assertEqual(response.status_code, 401)
+
+    def test_account_run_status_reads_only_small_owner_scoped_metadata(self):
+        c = TestClient(app)
+        user_id = "2b8e3e0d-7b39-4f73-83b9-90ee5d979fca"
+        run_id = "628a9906-127d-46c7-af5b-b0e979e2ac42"
+        with patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            },
+        ), patch("fieldshift.api.app.supabase_auth.get_user", return_value={"id": user_id}), patch(
+            "fieldshift.api.app.supabase_auth.rest_select",
+            side_effect=[
+                [{
+                    "id": run_id,
+                    "status": "waiting_for_data",
+                    "stage": "queued",
+                    "progress_percent": 75,
+                    "status_message": "Waiting for evidence.",
+                    "latest_result_id": None,
+                    "completed_at": None,
+                }],
+                [{"source_name": "NASA POWER", "status": "pending", "required": True, "next_retry_at": None}],
+            ],
+        ) as rest_select:
+            response = c.get(
+                f"/api/account/runs/{run_id}/status",
+                headers={"Authorization": "Bearer test-user-token"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["run"]["status"], "waiting_for_data")
+        self.assertEqual(len(rest_select.call_args_list), 2)
+        self.assertEqual(rest_select.call_args_list[0].args[0], "analysis_runs")
+        self.assertEqual(rest_select.call_args_list[1].args[0], "analysis_run_sources")
+        run_filters = rest_select.call_args_list[0].kwargs["filters"]
+        self.assertEqual(run_filters["user_id"], f"eq.{user_id}")
+        self.assertNotIn("*", run_filters["select"])
+        self.assertNotIn("result_payload", run_filters["select"])
+        source_filters = rest_select.call_args_list[1].kwargs["filters"]
+        self.assertNotIn("quality", source_filters["select"])
+        self.assertNotIn("provenance", source_filters["select"])
+
+    def test_account_run_detail_fetches_only_the_current_result_and_hydrates_drive_payload(self):
+        c = TestClient(app)
+        user_id = "2b8e3e0d-7b39-4f73-83b9-90ee5d979fca"
+        run_id = "628a9906-127d-46c7-af5b-b0e979e2ac42"
+        result_id = "7b8e3e0d-7b39-4f73-83b9-90ee5d979fca"
+        run = {
+            "id": run_id,
+            "client_request_id": "c5db7057-0bfb-4b54-855b-6f4db53c2c7a",
+            "request_payload": {"field": {"lat": 24.75, "lon": 90.41}},
+            "status": "final_ready",
+            "stage": "complete",
+            "progress_percent": 100,
+            "status_message": "Analysis complete.",
+            "latest_result_id": result_id,
+        }
+        result_reference = {
+            "storage_provider": "google_drive",
+            "archive_object_key": "analysis-results/c5db7057-0bfb-4b54-855b-6f4db53c2c7a/result.json",
+            "archive_sha256": "a" * 64,
+            "archive_size_bytes": 123,
+        }
+        restored = {"run": {"id": run_id}, "evidence": {"items": []}}
+        with patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            },
+        ), patch("fieldshift.api.app.supabase_auth.get_user", return_value={"id": user_id}), patch(
+            "fieldshift.api.app.supabase_auth.rest_select",
+            side_effect=[
+                [run],
+                [{"source_name": "NASA POWER", "status": "available", "required": True, "next_retry_at": None}],
+                [{
+                    "id": result_id,
+                    "run_id": run_id,
+                    "revision": 4,
+                    "result_kind": "final",
+                    "evidence_fingerprint": "a" * 64,
+                    "result_payload": result_reference,
+                    "is_current": True,
+                }],
+            ],
+        ) as rest_select, patch(
+            "fieldshift.api.app.supabase_auth.restore_result_payload",
+            return_value=restored,
+        ) as restore:
+            response = c.get(
+                f"/api/account/runs/{run_id}",
+                headers={"Authorization": "Bearer test-user-token"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["latest_result"]["result_payload"], restored)
+        self.assertEqual(rest_select.call_count, 3)
+        result_filters = rest_select.call_args_list[2].kwargs["filters"]
+        self.assertEqual(result_filters["id"], f"eq.{result_id}")
+        self.assertEqual(result_filters["limit"], "1")
+        self.assertNotEqual(result_filters["select"], "*")
+        restore.assert_called_once_with(result_reference)
 
     def test_saved_run_recheck_requires_a_supabase_session(self):
         c = TestClient(app)

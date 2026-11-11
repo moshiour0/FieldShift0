@@ -20,3 +20,44 @@ jobs:
       - run: python -m compileall -q src
       - run: python -m ruff check src/fieldshift/v3 src/fieldshift/api tests_v3
       - run: python -m mypy src/fieldshift/v3 src/fieldshift/api
+
+  google-drive-private-preflight:
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/supabase-egress-drive-result-archive'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+      GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Verify private Google Drive write/read/delete
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+
+          from fieldshift.v3 import google_drive
+
+          if not google_drive.configured():
+              print("Google Drive preflight failed: one or more required repository secrets are missing.")
+              sys.exit(1)
+          try:
+              result = google_drive.verify_storage()
+          except Exception as exc:
+              # Never print request headers, OAuth responses, or secret values.
+              print(f"Google Drive private archive preflight failed: {type(exc).__name__}")
+              sys.exit(1)
+          print(json.dumps({
+              "provider": result.get("provider"),
+              "status": result.get("status"),
+              "round_trip": result.get("round_trip"),
+              "credentials_configured": True,
+          }, sort_keys=True))
+          PY

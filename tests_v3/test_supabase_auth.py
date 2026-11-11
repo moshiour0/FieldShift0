@@ -133,11 +133,14 @@ class TestSupabaseAuth(unittest.TestCase):
             "start_date": "2026-08-01",
             "end_date": "2026-08-31",
         }
-        result = supabase_auth.persist_product_analysis(
-            access_token="user-access-token",
-            request_payload=request_payload,
-            response_payload=response,
-        )
+        with patch("fieldshift.v3.google_drive.configured", return_value=True), patch(
+            "fieldshift.v3.google_drive.put_object"
+        ) as drive_put:
+            result = supabase_auth.persist_product_analysis(
+                access_token="user-access-token",
+                request_payload=request_payload,
+                response_payload=response,
+            )
         self.assertEqual(result["run_id"], "628a9906-127d-46c7-af5b-b0e979e2ac42")
         call = save.call_args.kwargs
         self.assertEqual(call["run_record"]["status"], "final_with_gaps")
@@ -146,8 +149,63 @@ class TestSupabaseAuth(unittest.TestCase):
         self.assertEqual(call["sources"][1]["status"], "not_configured")
         self.assertEqual(call["sources"][2]["status"], "failed")
         self.assertEqual(call["result_record"]["result_kind"], "final_with_gaps")
+        result_ref = call["result_record"]["result_payload"]
+        self.assertEqual(result_ref["storage_provider"], "google_drive")
+        self.assertTrue(result_ref["archive_object_key"].startswith("analysis-results/"))
+        self.assertEqual(len(result_ref["archive_sha256"]), 64)
+        self.assertEqual(drive_put.call_args.args[0], result_ref["archive_object_key"])
         self.assertEqual(len(call["run_record"]["request_sha256"]), 64)
         self.assertEqual(len(call["result_record"]["evidence_fingerprint"]), 64)
+
+
+    def test_result_archive_requires_configured_private_google_drive(self) -> None:
+        with (
+            patch("fieldshift.v3.google_drive.configured", return_value=False),
+            self.assertRaises(supabase_auth.SupabaseAPIError) as raised,
+        ):
+            supabase_auth.archive_result_payload(
+                {"run": {"id": "run-1"}},
+                storage_key="c5db7057-0bfb-4b54-855b-6f4db53c2c7a",
+            )
+        self.assertEqual(raised.exception.status_code, 503)
+
+    def test_restore_result_payload_preserves_legacy_inline_result(self) -> None:
+        legacy = {"run": {"id": "old-run"}, "evidence": {"items": []}}
+        self.assertIs(supabase_auth.restore_result_payload(legacy), legacy)
+
+    def test_restore_result_payload_reads_and_verifies_google_drive_object(self) -> None:
+        import hashlib
+        import json
+
+        payload = {"run": {"id": "run-1"}, "evidence": {"items": []}}
+        content = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        ).encode("utf-8")
+        digest = hashlib.sha256(content).hexdigest()
+        reference = {
+            "storage_provider": "google_drive",
+            "archive_object_key": f"analysis-results/c5db7057-0bfb-4b54-855b-6f4db53c2c7a/{digest}.json",
+            "archive_sha256": digest,
+            "archive_size_bytes": len(content),
+        }
+        with patch("fieldshift.v3.google_drive.get_object", return_value=content) as drive_get:
+            restored = supabase_auth.restore_result_payload(reference)
+        self.assertEqual(restored, payload)
+        drive_get.assert_called_once_with(reference["archive_object_key"])
+
+    def test_restore_result_payload_rejects_tampered_drive_object(self) -> None:
+        reference = {
+            "storage_provider": "google_drive",
+            "archive_object_key": f"analysis-results/c5db7057-0bfb-4b54-855b-6f4db53c2c7a/{'0' * 64}.json",
+            "archive_sha256": "0" * 64,
+            "archive_size_bytes": 5,
+        }
+        with (
+            patch("fieldshift.v3.google_drive.get_object", return_value=b"false"),
+            self.assertRaises(supabase_auth.SupabaseAPIError) as raised,
+        ):
+            supabase_auth.restore_result_payload(reference)
+        self.assertEqual(raised.exception.status_code, 502)
 
 
 if __name__ == "__main__":

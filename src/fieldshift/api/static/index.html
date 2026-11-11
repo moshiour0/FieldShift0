@@ -143,7 +143,7 @@ button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.co
 <div class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,currentQueuedRunId:null,workerPollTimer:null,workerPollAttempts:0,workerRecheckAvailable:false,auth:{config:null,session:null,user:null,loading:true}};
+const state={data:null,activeScenario:'baseline',priorities:new Set(['water','soil','income']),map:null,heroMap:null,marker:null,fieldPolygon:null,boundaryPoints:[],drawMode:false,analysisBusy:false,pendingTimer:null,pendingAttempts:0,retryNotBefore:0,retryUnlockTimer:null,lastPayload:null,pollVersion:0,clientRequestId:null,currentQueuedRunId:null,currentQueuedResultId:null,currentQueuedStatus:null,workerPollTimer:null,workerPollAttempts:0,workerRecheckAvailable:false,auth:{config:null,session:null,user:null,loading:true}};
 const qs=s=>document.querySelector(s); const qsa=s=>Array.from(document.querySelectorAll(s));
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>`${Math.round(Math.max(0,Math.min(1,Number(v)||0))*100)}%`;
@@ -256,22 +256,46 @@ async function pollQueuedRun(runId,version,attempt){
   if(version!==state.pollVersion||state.currentQueuedRunId!==runId||!state.auth.user)return;
   if(attempt>=120){qs('#pending-message').textContent='This run is still saved and its background schedule continues. Reopen My Runs later for the latest result.';return;}
   try{
-    const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
+    const status=await accountApi('/api/account/runs/'+encodeURIComponent(runId)+'/status');
     if(version!==state.pollVersion||state.currentQueuedRunId!==runId)return;
-    const run=detail.run||{};
-    if(detail.latest_result&&detail.latest_result.result_payload){
-      const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
-      data.run.saved_run_id=run.id;data.run.status=run.status;data.run.status_message=run.status_message||data.run.status_message;
-      data.run.is_final=['final_ready','final_with_gaps'].includes(run.status);
-      applyData(data);showWorkerPending(detail);
-    }else{showQueuedRun(run);}
+    const run=status.run||{};
+    const latestResultId=run.latest_result_id||null;
+    const finalStatus=['final_ready','final_with_gaps'].includes(run.status);
+    const needsFullResult=Boolean(latestResultId)&&(
+      latestResultId!==state.currentQueuedResultId
+      ||(finalStatus&&state.currentQueuedStatus!==run.status)
+    );
+    if(needsFullResult){
+      const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
+      if(version!==state.pollVersion||state.currentQueuedRunId!==runId)return;
+      const loadedResultId=detail.latest_result?.id||null;
+      if(loadedResultId)state.currentQueuedResultId=loadedResultId;
+      if(detail.latest_result&&detail.latest_result.result_payload){
+        const data=JSON.parse(JSON.stringify(detail.latest_result.result_payload));
+        data.run.saved_run_id=run.id;data.run.status=run.status;data.run.status_message=run.status_message||data.run.status_message;
+        data.run.is_final=finalStatus;
+        applyData(data);showWorkerPending(detail);
+      }else{showQueuedRun(run);}
+    }else if(!latestResultId){
+      showQueuedRun(run);
+    }else{
+      if(state.data?.run){
+        state.data.run.status=run.status;
+        state.data.run.status_message=run.status_message||state.data.run.status_message;
+        state.data.run.is_final=finalStatus;
+        renderRunReadiness(state.data);
+      }
+      showWorkerPending(status);
+    }
+    state.currentQueuedStatus=run.status;
     const terminal=run.stage==='retry_exhausted'||['failed','cancelled'].includes(run.status)||Boolean(run.completed_at);
-    if(terminal){showWorkerPending(detail);return;}
+    if(terminal){showWorkerPending(status);return;}
     state.workerPollAttempts=attempt+1;
-    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),15000);
+    const delay=attempt<2?15000:attempt<6?30000:60000;
+    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),delay);
   }catch(e){
     qs('#pending-message').textContent='Could not refresh the run status just now. The saved background job is unaffected; My Runs can reload it later.';
-    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),30000);
+    state.workerPollTimer=setTimeout(()=>pollQueuedRun(runId,version,attempt+1),60000);
   }
 }
 
@@ -354,6 +378,8 @@ async function loadSavedRun(runId){
   try{
     stopEvidenceRefresh();state.pendingAttempts=0;const version=state.pollVersion;
     const detail=await accountApi('/api/account/runs/'+encodeURIComponent(runId));
+    state.currentQueuedResultId=detail.latest_result?.id||null;
+    state.currentQueuedStatus=detail.run.status||null;
     state.lastPayload={...(detail.run.request_payload||{}),client_request_id:detail.run.client_request_id};
     state.clientRequestId=detail.run.client_request_id;state.currentQueuedRunId=runId;
     closeDrawer();scrollToId('evidence-section');
@@ -451,7 +477,7 @@ function setDatePreset(){
 function stopEvidenceRefresh(){
   clearTimeout(state.pendingTimer);state.pendingTimer=null;
   clearTimeout(state.workerPollTimer);state.workerPollTimer=null;
-  state.currentQueuedRunId=null;state.workerPollAttempts=0;state.workerRecheckAvailable=false;state.pollVersion++;
+  state.currentQueuedRunId=null;state.currentQueuedResultId=null;state.currentQueuedStatus=null;state.workerPollAttempts=0;state.workerRecheckAvailable=false;state.pollVersion++;
   if(!qs('#pending-evidence').classList.contains('hidden'))qs('#pending-message').textContent='Browser checks stopped. Any accepted background run continues on the server.';
 }
 function scheduleEvidenceRefresh(data,version){

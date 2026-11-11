@@ -298,3 +298,40 @@ Save it, then open the stable Production URL, use the existing email account and
 - The one shared Free Supabase database means Preview and Production share run storage. The Preview deployment remains behind Vercel SSO; user data remains owner-scoped by RLS.
 
 **Release status:** Production app is live at the stable URL and the durable worker integration is verified. The email redirect dashboard setting and historical data backfill dispatch are the remaining owner actions; do not describe those as completed until their results are observed.
+
+
+---
+
+## 15. Organization egress audit and Drive-backed results — 11 November 2026
+
+### What the billing screenshot proves
+
+- The Supabase Usage page was showing **All projects**, not FieldShift0 alone. The Free organization contains five projects: FieldShift0 (created 9 November 2026), SARGuardian_Dynamic, SARGuardian-Monorepo, my-social-app and amc-physics-dept. Three were inactive and two active at the time of inspection.
+- The displayed 7.21 GB uncached egress (5 GB included; 2.21 GB over) is an organization aggregate. The graph begins 26 October, before FieldShift0 existed, so the full 7.21 GB cannot be attributed to FieldShift0. Supabase documents that all project usage is summed at organization level and that egress from PostgREST is labeled Database Egress.
+- Supabase Auth egress is separate from Database/PostgREST egress. The screenshot's hovered service identifies PostgREST egress, so this is not caused by the email magic-link identity verification alone.
+- In the inspected FieldShift0 window (11 November 03:10–09:10 UTC), the edge logs showed 73 idle worker ticks. Their PostgREST claim response was four bytes; the window also contained low-volume Auth events and no repeated full result-detail route traffic. This recent window does not explain the historical organization-wide total.
+- Supabase's current docs say logs can identify frequent database queries and requested API paths but do not yet include response-byte counts. Therefore project-specific Usage selection is required to attribute historic egress. No project has been paused or deleted, and no plan/billing setting has been changed.
+
+### Code-level FieldShift0 correction
+
+A review found that the saved-run detail endpoint fetched every analysis result revision using select=* and the browser called that full-detail endpoint every 15 seconds while the worker was active. The correction is prepared on branch fix/supabase-egress-drive-result-archive (not yet merged at this checkpoint):
+
+- New GET /api/account/runs/{run_id}/status reads only compact, owner-scoped run/source fields; it never reads the results table.
+- The browser uses that status endpoint with an adaptive 15/30/60-second interval. It fetches a full detail only when latest_result_id changes or the run transitions to final.
+- The detail route selects exactly the result pointed to by latest_result_id with limit=1 instead of fetching all historical revisions.
+- New full result JSON is archived to the private Google Drive folder under analysis-results/{run-or-request-uuid}/{sha256}.json. Supabase Postgres stores only the object key, SHA-256 and byte count in result_payload, alongside the tiny owner/job/status metadata needed for RLS and transactional leasing.
+- Detail reads fetch the Drive object on demand and verify SHA-256. Historical inline result payloads are still readable; no destructive data migration is performed.
+- Supabase does not automatically load the Google Drive parent folder. The adapter resolves the requested subfolder/object only, uses the restricted drive.file scope, and never makes files public.
+
+### Non-negotiable safeguards
+
+- Do not pause/delete Supabase projects or upgrade the organization just to clear the egress warning. The current Free-plan dashboard banner warns of organization project restrictions from 9 December 2026 if over-quota state persists; Supabase Fair Use restrictions can generally affect all projects in a restricted organization, so the warning must not be ignored.
+- Do not assume that the FieldShift0 project caused the entire 7.21 GB. Inspect the usage page with each project selected separately. In particular, the pre-9 November traffic belongs to older project(s)/branches.
+- Keep Supabase for Auth, compact owner metadata and the transactional queue. Do not use Google Drive for queue locks; Drive is not a transactional database.
+- Keep full datasets and full analysis result blobs in private Google Drive. Never move large file payloads back into Postgres or add Supabase Storage buckets for these data.
+- No upgrade, paid SMTP, domain purchase, project pause/delete, user deletion or secret disclosure was performed as part of this audit.
+
+### Release gate
+
+This branch has not yet passed its new CI run or been merged. Do not treat Drive-backed result writes or the status-only polling route as Production behavior until the PR, CI, Production deployment, and a real private Drive write/read/SHA-256 smoke test all pass. The Production site remains on its already-released main commit until then.
+

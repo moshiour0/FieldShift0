@@ -351,30 +351,32 @@ def put_object(
 
 
 def verify_storage() -> dict[str, str]:
-    """Perform a temporary Drive write/read/delete round-trip before ingestion."""
+    """Verify the exact private object-store put/get/delete path before ingestion."""
     key = f"_preflight/probe-{uuid.uuid4().hex}.txt"
     marker = f"FieldShift0 Drive preflight {uuid.uuid4().hex}".encode()
-    parts = _parts(key)
-    parent_id = _resolve_parent(parts[:-1], create=True)
-    if parent_id is None:
-        raise GoogleDriveError("Could not create Google Drive preflight folder")
-    item_id: str | None = None
+    digest = hashlib.sha256(marker).hexdigest()
+    primary_error: Exception | None = None
     try:
-        created = _upload(
-            file_id=None,
-            parent_id=parent_id,
-            name=parts[-1],
-            content=marker,
-            mime_type="text/plain",
-        )
-        item_id = str(created["id"])
-        raw, _ = _auth_request(
-            "GET",
-            _url(f"files/{urllib.parse.quote(item_id, safe='')}", {"alt": "media"}),
-        )
-        if raw != marker:
-            raise GoogleDriveError("Google Drive preflight read-back did not match uploaded bytes")
-    finally:
-        if item_id:
-            _auth_request("DELETE", _url(f"files/{urllib.parse.quote(item_id, safe='')}"))
+        put_object(key, marker, sha256=digest, mime_type="text/plain")
+        restored = get_object(key)
+        if restored is None or restored != marker or hashlib.sha256(restored).hexdigest() != digest:
+            raise GoogleDriveError("Google Drive preflight read-back failed its byte or SHA-256 check")
+    except Exception as exc:
+        primary_error = exc
+
+    try:
+        parts = _parts(key)
+        parent_id = _resolve_parent(parts[:-1], create=False)
+        item = _child(parent_id, parts[-1]) if parent_id else None
+        file_id = str(item["id"]) if item and item.get("id") else None
+        if file_id:
+            _auth_request("DELETE", _url(f"files/{urllib.parse.quote(file_id, safe='')}"))
+    except Exception as cleanup_error:
+        if primary_error is None:
+            primary_error = cleanup_error
+
+    if primary_error is not None:
+        if isinstance(primary_error, GoogleDriveError):
+            raise primary_error
+        raise GoogleDriveError("Google Drive private object preflight failed") from primary_error
     return {"provider": "google_drive", "status": "ok", "round_trip": "verified"}

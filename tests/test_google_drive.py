@@ -46,6 +46,79 @@ def test_drive_sha256_check_happens_before_api_calls(monkeypatch: pytest.MonkeyP
         google_drive.put_object("power-history/dhaka/2025.json", body, sha256="0" * 64)
 
 
+
+def test_drive_preflight_uses_object_store_put_get_and_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "root")
+    calls: list[tuple[str, str]] = []
+    marker: dict[str, bytes] = {}
+
+    def fake_put(key: str, content: bytes, *, sha256: str | None = None, mime_type: str = "application/json"):
+        assert sha256 == hashlib.sha256(content).hexdigest()
+        assert mime_type == "text/plain"
+        marker[key] = content
+        calls.append(("put", key))
+        return {"id": "preflight-file"}
+
+    def fake_get(key: str) -> bytes | None:
+        calls.append(("get", key))
+        return marker.get(key)
+
+    def fake_parent(parts: list[str], *, create: bool) -> str:
+        assert parts == ["_preflight"]
+        assert create is False
+        calls.append(("parent", "/".join(parts)))
+        return "preflight-folder"
+
+    def fake_child(parent_id: str, name: str, mime_type: str | None = None):
+        assert parent_id == "preflight-folder"
+        assert name.startswith("probe-")
+        calls.append(("lookup", name))
+        return {"id": "preflight-file"}
+
+    def fake_auth_request(method: str, url: str, **kwargs):
+        assert method == "DELETE"
+        assert "preflight-file" in url
+        calls.append(("delete", method))
+        return b"", {}
+
+    monkeypatch.setattr(google_drive, "put_object", fake_put)
+    monkeypatch.setattr(google_drive, "get_object", fake_get)
+    monkeypatch.setattr(google_drive, "_resolve_parent", fake_parent)
+    monkeypatch.setattr(google_drive, "_child", fake_child)
+    monkeypatch.setattr(google_drive, "_auth_request", fake_auth_request)
+
+    assert google_drive.verify_storage() == {
+        "provider": "google_drive",
+        "status": "ok",
+        "round_trip": "verified",
+    }
+    assert [name for name, _ in calls] == ["put", "get", "parent", "lookup", "delete"]
+
+
+def test_drive_preflight_deletes_the_object_when_read_back_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "root")
+    calls: list[str] = []
+
+    def fake_parent(parts: list[str], *, create: bool) -> str:
+        return "preflight-folder"
+
+    def fake_child(parent_id: str, name: str, mime_type: str | None = None):
+        return {"id": "preflight-file"}
+
+    def fake_auth_request(method: str, url: str, **kwargs):
+        calls.append(method)
+        return b"", {}
+
+    monkeypatch.setattr(google_drive, "put_object", lambda *args, **kwargs: None)
+    monkeypatch.setattr(google_drive, "get_object", lambda _key: b"tampered")
+    monkeypatch.setattr(google_drive, "_resolve_parent", fake_parent)
+    monkeypatch.setattr(google_drive, "_child", fake_child)
+    monkeypatch.setattr(google_drive, "_auth_request", fake_auth_request)
+
+    with pytest.raises(google_drive.GoogleDriveError, match="SHA-256"):
+        google_drive.verify_storage()
+    assert calls == ["DELETE"]
+
 def test_drive_query_escape() -> None:
     assert google_drive._escape_query("folder'name") == "folder\\'name"
 

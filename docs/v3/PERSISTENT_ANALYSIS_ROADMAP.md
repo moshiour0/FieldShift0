@@ -740,3 +740,23 @@ A full-function replacement for the worker lease/audit ordering fix unintentiona
 3. Register and dispatch the 2025 nine-point SMAP pilot only after PR #2 is approved/merged; require full QA and remote private Drive checksum read-back.
 4. Backfill and verify POWER daily history for 2016–2024; do not label monthly chart aggregates as daily coverage.
 5. Provision a separate Production Supabase/Auth/worker environment and pass the same account/queue gates before Production release.
+
+
+---
+
+## 16. Supabase egress reduction and Google Drive result archive — 11 November 2026
+
+The organization Usage screenshot is an All-projects view, not a per-project measurement. Five Supabase projects exist in the Free organization; FieldShift0 was created on 9 November, whereas the graph includes activity from 26 October. The 7.21 GB aggregate therefore cannot be attributed wholly to FieldShift0. Auth egress is separate from PostgREST/Database egress; the screenshot explicitly identifies PostgREST.
+
+A code audit found two avoidable egress multipliers in the signed-in My Runs path: the detail endpoint selected every column and every result revision, and the client repeated that full-detail request during background polling. Branch fix/supabase-egress-drive-result-archive addresses this without changing the database schema:
+
+1. Add an owner-scoped status endpoint that selects only compact run/source status and never queries analysis_results.
+2. Poll with an adaptive interval, fetching the full detail only when latest_result_id changes or the run transitions to final.
+3. Read a single current analysis_results row by latest_result_id with limit=1; do not return all historical revisions.
+4. Put full new result JSON in the existing private Google Drive object store under a run/request UUID and SHA-256 path. Supabase stores only the Drive reference, SHA-256, byte count and small metadata/queue state.
+5. Verify SHA-256 when restoring Drive objects. Continue to read legacy inline result payloads so existing saved analyses do not break.
+
+Supabase still owns Auth, owner RLS, compact run metadata and the atomic transactional job queue. This preserves correct lease/idempotency semantics; Google Drive is not used as a queue database. No schema migration or destructive old-row migration is required.
+
+At this checkpoint the branch is not yet merged or deployed; CI and a real Drive write/read round-trip are release gates. The Usage dashboard supports selecting an individual project/branch; measure each one before attributing historic organization egress or changing the status of another project. Do not pause/delete projects or upgrade from Free solely to clear the warning. The dashboard warning gives 9 December 2026 as the restriction date if the organization remains over quota.
+

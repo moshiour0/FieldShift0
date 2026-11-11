@@ -188,6 +188,80 @@ def request_analysis_run_recheck(*, access_token: str, run_id: str) -> dict[str,
     return result
 
 
+def archive_result_payload(result_payload: dict[str, Any], *, storage_key: str) -> dict[str, Any]:
+    """Store a full analysis JSON document in private Google Drive, not Postgres."""
+    from fieldshift.v3 import google_drive
+
+    safe_key = str(storage_key).strip()
+    if not safe_key or len(safe_key) > 128 or any(
+        char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in safe_key
+    ):
+        raise ValueError("A safe analysis archive key is required.")
+    if not google_drive.configured():
+        raise SupabaseAPIError(
+            503,
+            "Google Drive result storage is not configured; the result was not copied into Supabase.",
+        )
+
+    content = json.dumps(
+        result_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    digest = hashlib.sha256(content).hexdigest()
+    object_key = f"analysis-results/{safe_key}/{digest}.json"
+    try:
+        google_drive.put_object(object_key, content, sha256=digest, mime_type="application/json")
+    except google_drive.GoogleDriveError as exc:
+        raise SupabaseAPIError(503, "Google Drive could not store the analysis result.") from exc
+    return {
+        "storage_provider": "google_drive",
+        "archive_object_key": object_key,
+        "archive_sha256": digest,
+        "archive_size_bytes": len(content),
+    }
+
+
+def restore_result_payload(stored_payload: Any) -> Any:
+    """Hydrate a private Drive result reference; pass through legacy inline results."""
+    if not isinstance(stored_payload, dict) or stored_payload.get("storage_provider") != "google_drive":
+        return stored_payload
+
+    from fieldshift.v3 import google_drive
+
+    object_key = str(stored_payload.get("archive_object_key") or "")
+    expected_sha = str(stored_payload.get("archive_sha256") or "")
+    parts = object_key.split("/")
+    if (
+        len(parts) != 3
+        or parts[0] != "analysis-results"
+        or not parts[1]
+        or len(expected_sha) != 64
+        or any(char not in "0123456789abcdef" for char in expected_sha.lower())
+        or parts[2] != f"{expected_sha}.json"
+    ):
+        raise SupabaseAPIError(502, "The saved Google Drive result reference is invalid.")
+
+    try:
+        content = google_drive.get_object(object_key)
+    except google_drive.GoogleDriveError as exc:
+        raise SupabaseAPIError(503, "Google Drive could not retrieve the saved analysis result.") from exc
+    if content is None:
+        raise SupabaseAPIError(503, "The saved analysis result is not available in Google Drive.")
+    actual_sha = hashlib.sha256(content).hexdigest()
+    if actual_sha != expected_sha:
+        raise SupabaseAPIError(502, "The saved Google Drive result failed its integrity check.")
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SupabaseAPIError(502, "The saved Google Drive result is not valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise SupabaseAPIError(502, "The saved Google Drive result has an invalid structure.")
+    return payload
+
+
 def persist_product_analysis(
     *,
     access_token: str,
@@ -290,7 +364,7 @@ def persist_product_analysis(
     result_record = {
         "result_kind": result_kind,
         "evidence_fingerprint": evidence_fingerprint,
-        "result_payload": response_payload,
+        "result_payload": archive_result_payload(response_payload, storage_key=client_request_id),
     }
     return save_completed_analysis(
         access_token=access_token,
@@ -430,7 +504,7 @@ def save_worker_analysis(
     result_record = {
         "result_kind": result_kind,
         "evidence_fingerprint": evidence_fingerprint,
-        "result_payload": response_payload,
+        "result_payload": archive_result_payload(response_payload, storage_key=run_id),
     }
     result = worker_rpc(
         "worker_save_analysis",

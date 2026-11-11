@@ -56,9 +56,11 @@ Before the GitHub/Vercel release, the connector layer was smoke-tested externall
 
 ## V3.3 account and worker path
 
-The V3.3 signed-in dashboard does not depend on process-local state for saved runs. The browser submits a request to `POST /api/analysis/queue`; Supabase stores the immutable request and idempotency key, and the scheduled worker processes one leased job at a time. Owners list and restore analyses through `GET /api/account/runs` and `GET /api/account/runs/{run_id}`. Manual owner recheck uses `POST /api/account/runs/{run_id}/recheck`.
+The V3.3 signed-in dashboard does not depend on process-local state for saved runs. The browser submits a request to POST /api/analysis/queue; Supabase Postgres stores the immutable request snapshot, owner metadata, source status and transactional job lease/idempotency state. The scheduled worker processes one leased job at a time. Full analysis result JSON and large source archives are stored as private Google Drive objects; Postgres stores only the Drive object key, SHA-256, byte count and current-result pointer. Existing older inline result rows remain readable.
 
-The feature-branch Preview variables are scoped to `feat/krishinexus-real-data-school-lab`. At the current handoff, they are not provisioned for Production. Do not copy the Preview Supabase URL/token into Production without an explicit environment/database plan; use a separately provisioned Production Supabase project and its own migrations, Auth redirect allowlist, worker token and five-minute schedule before promotion. The public Supabase email sender is restricted; configure custom SMTP before allowing public sign-ups. See the Final Owner Handoff for the current acceptance and release gate.
+Owners list analyses through GET /api/account/runs. While a job is active, the browser polls GET /api/account/runs/{run_id}/status, which reads only compact run/source state and never loads result JSON. GET /api/account/runs/{run_id} fetches one current result revision by latest_result_id and hydrates the private Google Drive object only when the user opens/refreshes a result. Manual owner recheck uses POST /api/account/runs/{run_id}/recheck.
+
+Production uses the existing FieldShift0 Supabase Free project bipyrlegaxmhwzwrmcmi and its reviewed RLS/worker schema; Preview and Production share that project, so never create a second project or apply an unreviewed migration. Supabase is not used as a bulk dataset/result file store. Keep Google Drive OAuth credentials present in Production; /api/status reports whether the Drive result archive is configured, not whether the OAuth token has passed a live round-trip. The public Supabase email sender remains restricted; do not add paid SMTP under a strict $0 budget.
 
 
 ## Fix the Supabase email redirect before testing Sign in
@@ -81,3 +83,11 @@ The Supabase project organization is verified on Free. Default Auth SMTP is incl
 Earth Engine is disabled in the V3.3 code by default. Setting `FIELD_SHIFT_GEE_PROJECT` and `FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON` is no longer sufficient. The app and SMAP archive scripts also require `FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED=true` after the owner has verified eligibility for Google's noncommercial/research use and confirmed there are no paid Cloud services/billing that could create charges. The SMAP Actions workflow checks the corresponding Repository Actions Variable and stops before requests if it is absent.
 
 For strict no-cost operation, leave that flag absent. Do not register the project as commercial, add a payment method or enable billable Cloud services. If later verified as eligible noncommercial, add the opt-in separately to Vercel Preview and GitHub Actions Variables; never copy it into Production automatically. The two GEE credential variables are currently Preview-only and removed from Vercel Production.
+
+
+## Egress-remediation Preview state — 11 November 2026
+
+For PR #4 (`fix/supabase-egress-drive-result-archive`), branch-scoped Preview variables `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` were added using the existing Production FieldShift0 Free project values. The Preview intentionally has no worker token, so it cannot claim Production jobs. The four Google Drive variables are already present as Preview + Production secrets. GitHub Actions ran a private Drive `put_object/get_object` SHA-256 round-trip and delete preflight successfully.
+
+Vercel rejected a further Preview deployment due the Free-plan `api-deployments-free-per-day` limit. Do not attempt to bypass it with another team/project, plan upgrade or alternate billing. Existing Preview deployments retain their original environment snapshot; they will not pick up the new branch-scoped Supabase variables until a new deployment is created. Production remains unchanged until PR review and a successful Production deployment.
+
