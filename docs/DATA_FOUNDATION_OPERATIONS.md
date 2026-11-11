@@ -6,7 +6,7 @@ This runbook describes the reproducible NASA POWER daily point archive for the n
 
 - Authoritative release record: [Final Owner Handoff](v3/FINAL_HANDOFF_2026-11-11.md).
 - Current reviewed feature head `9adacb90cf06d2745226b39096bd46fe46de3ac4`; exact Preview `https://field-shift0-e4qwww1wl.vercel.app` (READY, matching Git SHA).
-- Latest CI #619 (PR) passed Python 3.11/3.12: 187 tests each, one existing Starlette/httpx deprecation warning, Ruff, compileall and mypy. Workflow actions are pinned to immutable current Node 24 release commits.
+- Latest runtime-correction CI #619 passed Python 3.11/3.12: 187 tests each, one existing Starlette/httpx deprecation warning, Ruff, compileall and mypy. Subsequent documentation/operations CI #636 also passed both Python versions. Workflow actions are pinned to immutable current Node 24 release commits.
 - 2025 NASA POWER is already complete and readable for all nine reference points (365/365, coverage 1.0, SHA-256). Years 2016–2024 are not yet proven daily.
 - SMAP/HLS/MODIS MOD16/GPM remain `not_archived`; the 2025 SMAP pilot is not yet run.
 - [PR #2](https://github.com/moshiour0/FieldShift0/pull/2) registers only the manual SMAP workflow; [PR #3](https://github.com/moshiour0/FieldShift0/pull/3) registers only weekly POWER refresh. Both remain Draft/Open/Unmerged. Workflow-only merges may trigger a Production redeploy because Vercel is connected to `main`.

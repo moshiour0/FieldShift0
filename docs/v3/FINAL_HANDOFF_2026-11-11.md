@@ -186,3 +186,12 @@ The documentation refresh changes no runtime code, secrets, cloud ownership, dat
 ## 11. Repository governance note — 11 November 2026
 
 The default `main` branch is currently **not protected** and has no required status-check rules. CI runs are passing on PR #1, but GitHub does not currently enforce those checks as a merge requirement. Before a future Production release, configure a repository ruleset/branch protection that requires the FieldShift CI checks and review approval. The available GitHub connection can read this state but does not expose branch-protection mutation, so no repository protection setting was changed.
+
+
+## 12. Final owner handoff validation — 11 November 2026, 05:52 UTC
+
+- The runtime fix that must be used by the feature branch is `9adacb90cf06d2745226b39096bd46fe46de3ac4`; its matching Preview `dpl_37RcoXzaANYhit4CDtaDiV94qQMD` is READY.
+- The current documentation/operations checkpoint before this final handoff consolidation was `749bbd04b2837ca51ad212984f818c6f721635e8`; its matching Preview `dpl_HUHD1xZaCWR7vhQMGsLG4bRKfSoT` was READY.
+- PR CI run #636 (`42968480158`) passed Python 3.11 and 3.12: **187 passed per job**, one existing Starlette/httpx TestClient deprecation warning per job; Ruff, compileall and mypy passed in both matrices.
+- The final documentation consolidation changes no application runtime, database function, provider credentials, workflow dispatch, or Production setting.
+- PR #1 remains Draft/Open/Unmerged; PR #2/#3 remain Draft/Open/Unmerged; no Production deployment or main merge is authorized by this handoff.
