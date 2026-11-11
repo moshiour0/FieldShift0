@@ -466,6 +466,7 @@ def test_dates_survive_api_what_if_and_report(monkeypatch):
 
 def test_nex_uses_cached_historical_normals_for_second_scenario(monkeypatch, tmp_path):
     monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
     monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
     monkeypatch.setattr(gee, "_initialise_ee", lambda: object())
     old = {"tasmax": 301, "tasmin": 291, "hurs": 70, "pr": 0.0001, "rsds": 150, "sfcWind": 2}
@@ -497,6 +498,7 @@ def test_earth_engine_graphs_build_with_official_python_client(monkeypatch, tmp_
     case.setUp()
     try:
         monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
         monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
         monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
         graphs = []
@@ -520,6 +522,7 @@ def test_earth_engine_graphs_build_with_official_python_client(monkeypatch, tmp_
 
 def test_initial_smap_cache_miss_returns_pending_without_live_gee(monkeypatch, tmp_path):
     monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
     monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
     monkeypatch.setattr(gee.google_drive, "configured", lambda: False)
 
@@ -546,6 +549,7 @@ def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path
     case.setUp()
     try:
         monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
         monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
         monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
         monkeypatch.setattr(gee.google_drive, "configured", lambda: False)
@@ -593,6 +597,7 @@ def test_partial_smap_year_is_not_archived_or_reused_as_a_complete_cache(monkeyp
     writes = []
     try:
         monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
         monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
         monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
         monkeypatch.setattr(gee.google_drive, "configured", lambda: True)
@@ -663,6 +668,7 @@ def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, 
     objects: dict[str, bytes] = {}
     try:
         monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
         monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
         monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
         monkeypatch.setattr(gee.google_drive, "configured", lambda: True)
@@ -715,6 +721,7 @@ def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, 
 
 def test_nex_pending_can_resume_cached_months(monkeypatch, tmp_path):
     monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_NONCOMMERCIAL_CONFIRMED", "true")
     monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
     monkeypatch.setattr(gee, "_initialise_ee", lambda: object())
     old = {"tasmax": 301, "tasmin": 291, "hurs": 70, "pr": 0.0001, "rsds": 150, "sfcWind": 2}
