@@ -67,7 +67,7 @@ class TestAnalysisWorker(unittest.TestCase):
                 return_value={"storage_provider": "google_drive", "archive_object_key": "analysis-results/run-123/result.json"},
             ) as archive,
         ):
-            analysis_worker._save_result("job-1", engine_result, "w" * 56)
+            analysis_worker._save_result("job-1", "run-123", engine_result, "w" * 56)
 
         payload = save.call_args.kwargs["payload"]
         self.assertEqual(payload["p_run"]["status"], "preliminary_ready")
@@ -100,7 +100,7 @@ class TestAnalysisWorker(unittest.TestCase):
                 return_value={"storage_provider": "google_drive", "archive_object_key": "analysis-results/run-123/result.json"},
             ) as archive,
         ):
-            analysis_worker._save_result("job-1", engine_result, "w" * 56)
+            analysis_worker._save_result("job-1", "run-123", engine_result, "w" * 56)
         payload = save.call_args.kwargs["payload"]
         self.assertEqual(payload["p_run"]["status"], "waiting_for_data")
         self.assertEqual(payload["p_result"]["result_payload"]["storage_provider"], "google_drive")
@@ -127,7 +127,7 @@ class TestAnalysisWorker(unittest.TestCase):
                 return_value={"storage_provider": "google_drive", "archive_object_key": "analysis-results/run-123/result.json"},
             ) as archive,
         ):
-            analysis_worker._save_result("job-1", engine_result, "w" * 56)
+            analysis_worker._save_result("job-1", "run-123", engine_result, "w" * 56)
 
         payload = save.call_args.kwargs["payload"]
         self.assertEqual(payload["p_run"]["status"], "final_ready")
