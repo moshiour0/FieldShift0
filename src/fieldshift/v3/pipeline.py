@@ -201,10 +201,20 @@ def build_field(cfg: dict[str, Any], priorities: dict[str, float], field_overrid
     farmer_cfg = f.get("farmer", {})
     soil = SoilProfile(**s)
     farmer = FarmerContext(priorities=priorities, **{k: v for k, v in farmer_cfg.items() if k != "priorities"})
+    polygon_raw = f.get("polygon")
+    polygon = None
+    if polygon_raw is not None:
+        if not isinstance(polygon_raw, list):
+            raise ValueError("field polygon must be a list of latitude/longitude pairs")
+        polygon = []
+        for point in polygon_raw:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError("each field polygon vertex must be a latitude/longitude pair")
+            polygon.append((float(point[0]), float(point[1])))
     field = FieldV2(field_id=f["field_id"], lat=float(f["lat"]), lon=float(f["lon"]), area_ha=float(f["area_ha"]),
                     elevation_m=float(f.get("elevation_m", 20)), land_type=f.get("land_type", "medium highland"),
                     soil=soil, irrigation_source=f.get("irrigation_source", "unknown"), farmer=farmer,
-                    previous_crop=f.get("previous_crop"))
+                    previous_crop=f.get("previous_crop"), polygon=polygon)
     field.validate()
     return field
 
