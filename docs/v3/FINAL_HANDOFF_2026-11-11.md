@@ -2,15 +2,17 @@
 
 **Prepared:** 11 November 2026 (Asia/Dhaka)  
 **Repository:** `moshiour0/FieldShift0`  
-**Working branch:** `feat/krishinexus-real-data-school-lab`  
-**PR #1:** [Open · Draft · Unmerged · Mergeable](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Verified V3.3 runtime correction SHA:** `9adacb90cf06d2745226b39096bd46fe46de3ac4`  
-**Last confirmed READY runtime Preview:** https://field-shift0-e4qwww1wl.vercel.app  
-**Preview deployment:** `dpl_37RcoXzaANYhit4CDtaDiV94qQMD`  
-**Supabase Preview project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · `ap-south-1`  
-**Production:** deliberately not promoted; see the separate Production status below.
+**Production branch:** `main`  
+**PR #1:** [Merged](https://github.com/moshiour0/FieldShift0/pull/1) · merge SHA `1e96de91ba991c6265a9db6956bffedb880115a2`  
+**Latest main commit:** `0c84051abb7d13a0d55ab02ae75017a549c360df`  
+**Stable Production URL:** https://field-shift0.vercel.app  
+**Latest Production deployment:** `dpl_CWxAQCCRMABZMj4ASxFPzWw4eAtU` · READY  
+**Supabase project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · Free · `ap-south-1`  
+**Superseded workflow PRs:** #2 and #3 closed; their workflow files are included in PR #1.
 
-## 1. Current verification snapshot
+> **Release status:** Production is live. Sections 1–14 below retain the earlier pre-release audit snapshots as historical context; whenever they conflict with the final release state, **Section 15 is authoritative**. Do not follow old Preview-only instructions in the historical sections.
+>
+## 1. Historical pre-release verification snapshot
 
 ### GitHub and CI
 
