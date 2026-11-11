@@ -2,6 +2,18 @@
 
 This runbook describes the reproducible NASA POWER daily point archive for the nine configured Bangladesh reference points. It does not claim official AEZ zonal coverage, farm-level measurements, or satellite-product coverage.
 
+## Owner handoff checkpoint — 11 November 2026
+
+- Authoritative release record: [Final Owner Handoff](v3/FINAL_HANDOFF_2026-11-11.md).
+- Current feature branch SHA at the runtime validation checkpoint: `aac5f19f6da71bc7a0d6cf862a56e74e49915cc7`; exact Preview `https://field-shift0-2eee1evuc.vercel.app`.
+- CI #600 (push) and #601 (PR) passed Python 3.11/3.12: 184 tests each, Ruff, compileall and mypy. Workflow actions are pinned to immutable current Node 24 release commits.
+- 2025 NASA POWER is already complete and readable for all nine reference points (365/365, coverage 1.0, SHA-256). Years 2016–2024 are not yet proven daily.
+- SMAP/HLS/MODIS MOD16/GPM remain `not_archived`; the 2025 SMAP pilot is not yet run.
+- [PR #2](https://github.com/moshiour0/FieldShift0/pull/2) registers only the manual SMAP workflow; [PR #3](https://github.com/moshiour0/FieldShift0/pull/3) registers only weekly POWER refresh. Both remain Draft/Open/Unmerged. Workflow-only merges may trigger a Production redeploy because Vercel is connected to `main`.
+- Preview Supabase has 24 migrations. The worker lease/audit ordering fix is applied as `20261111040447_worker_event_before_lease_release_v2` and stored in the same-named repository migration file. The active worker cron returns successful idle ticks; no real user job is present.
+- Production is still on product 3.1.3 and reports `process_memory`; the durable Supabase/Auth/worker configuration is Preview-only. Do not promote until the separate Production migration/environment and human account acceptance gates pass.
+
+
 ## Current verified state — 10 November 2026
 
 - The exact-head Preview returned complete NASA POWER daily history for **all nine reference points** over 2025-01-01 through 2025-12-31: 365/365 days, coverage 1.0, no missing dates and SHA-256 provenance.
