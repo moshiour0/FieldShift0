@@ -127,3 +127,23 @@ The latest Preview SQL read-back confirms the required/optional evidence contrac
 The organization-level usage page defaults to All projects, aggregating all projects and preview branches in the organization. It cannot attribute egress to FieldShift0 alone. Select each project/branch separately before deciding which application generated traffic. Do not pause/delete a project or change the organization plan as a first-line response.
 
 FieldShift0's status-polling path was specifically reduced: repeated polls read only owner-scoped run/source status; a full result is requested only when its latest_result_id changes or the final status transitions. Historical result revisions are not fetched during polling. Full analysis JSON is archived in private Google Drive with SHA-256 verification; Postgres retains a compact pointer and small transactional metadata.
+
+
+## Private Google Drive result-object preflight — 11 November 2026
+
+The FieldShift egress-remediation PR adds a dedicated GitHub Actions job, restricted to PR branch `fix/supabase-egress-drive-result-archive`. It runs `google_drive.verify_storage()` using the same Google Drive adapter as production. The preflight:
+- creates a uniquely named temporary object under the configured private root folder;
+- writes via `put_object()`, reads it back via `get_object()`, and verifies the exact bytes and SHA-256;
+- deletes the temporary file in a `finally` cleanup path;
+- prints only provider/status/round-trip metadata. OAuth client values, refresh tokens, folder IDs and access tokens are never printed.
+
+The live preflight passed on the PR branch. This proves the GitHub repository's four Drive secrets can reach and write/read/delete in the configured private folder. The Vercel Production environment separately reports all four Drive variables as configured and `/api/status` reports the provider as private Google Drive, but the Vercel secret values are not extracted or compared to GitHub values.
+
+### Preview environment and deployment constraint
+
+- The branch-specific Vercel Preview target now has `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` copied from the same existing FieldShift0 Free Supabase project (`bipyrlegaxmhwzwrmcmi`) used by Production. No second Supabase project, service-role key or extra worker token was created.
+- The Preview intentionally does not receive the Production worker token; this prevents a preview worker from competing with the Production transactional queue.
+- Existing Preview deployments do not inherit environment-variable changes retroactively. A new Preview build is required before `/api/status` can show signed-in account storage as configured.
+- Vercel's Free deployment API limit rejected another Preview build with `api-deployments-free-per-day`. No plan upgrade or billing change was made. The current Preview URL is therefore an older build and still reports Supabase Preview account storage as unconfigured; do not treat it as a test of the new branch code.
+- Production has not been changed by this PR. Keep result writes fail-closed when private Drive is unavailable; do not silently move large result JSON back into Supabase.
+
