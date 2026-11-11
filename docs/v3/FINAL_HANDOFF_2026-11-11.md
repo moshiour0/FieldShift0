@@ -4,9 +4,9 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR #1:** [Open · Draft · Unmerged · Mergeable](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Validated feature SHA:** `aac5f19f6da71bc7a0d6cf862a56e74e49915cc7`  
-**Exact-head Preview:** https://field-shift0-2eee1evuc.vercel.app  
-**Preview deployment:** `dpl_FThVJpxo8tKp5GArfnEkDVAH7L3R`  
+**Current reviewed feature head:** `f0103f57590377051b74bb054e690db884125a82`  
+**Exact-head Preview:** https://field-shift0-hsqscngyc.vercel.app  
+**Preview deployment:** `dpl_2zf4cBooH5YUBYLP29ayngycfbp5`  
 **Supabase Preview project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · `ap-south-1`  
 **Production:** deliberately not promoted; see the separate Production status below.
 
@@ -111,3 +111,36 @@ The GitHub repository is under `moshiour0`, the Vercel project is under the owne
 Google Drive OAuth belongs to the Google account that created the private archive folder. Keep the folder private and retain its access under the owner's Google account. For another operator, grant that person least-privilege GitHub, Vercel, Supabase and Drive access through each provider; never share secret values in chat or commit them to Git.
 
 **Release decision:** Engineering Preview is verified and the PR is mergeable, but the whole project is **not yet operationally complete or Production-ready** until the owner-controlled live data and authenticated user gates above pass.
+
+
+---
+
+## 8. Worker failure-path audit update — 11 November 2026, 05:16 UTC
+
+A second worker lease/RLS ordering defect was identified during a source-level review of the failure path. The successful-save function already wrote its audit event before releasing the active lease, but `worker_fail_analysis_job()` previously released/rescheduled the job before inserting its failure/retry event. The event INSERT policy requires `private.worker_has_active_lease(run_id)`, so a provider/network failure could make that event write fail and roll back failure bookkeeping.
+
+### Fix committed and applied to Preview
+
+- Added `supabase/migrations/20261111050822_worker_fail_event_before_lease_release.sql`.
+- The replacement `public.worker_fail_analysis_job()` retains the incoming worker-token comparison, active-lease check and row lock (`FOR UPDATE`).
+- The run failure state is updated first when terminal; the audit event is then inserted while the queue row is still `running` and the lease is valid. Only after that event succeeds is the job marked `retrying` or `failed` and the lease cleared.
+- Added `tests/test_worker_fail_migration.py`, which protects the required event-before-lease-release ordering and token/lease checks.
+- Applied the migration to the non-production FieldShift0 Supabase Preview project. Database migration history now records `20261111050822_worker_fail_event_before_lease_release`; function-definition read-back confirms the new event ordering. No Production database was changed.
+- New commit: `f0103f57590377051b74bb054e690db884125a82`.
+- PR CI run #611 (`42964413377`) passed on Python 3.11 and 3.12: **185 passed, 1 existing Starlette/httpx TestClient deprecation warning per job**. `compileall`, Ruff and mypy (34 source files) passed in both jobs.
+- Vercel Preview deployment `dpl_2zf4cBooH5YUBYLP29ayngycfbp5` is READY and its Git SHA matches `f0103f57590377051b74bb054e690db884125a82`.
+
+### Current verification boundary
+
+- PR #1 remains Open / Draft / Unmerged; PR #2 and #3 remain Open / Draft / Unmerged. Production remains on the unchanged `main` application baseline and has not been promoted.
+- The Preview database has the canonical five-minute worker schedule. The queue and seven checked run/source/result/event/job/cache/profile tables remain empty; there is no real owner-created run on which to exercise a live provider-failure retry. The failure-path fix is migration-read-back and CI-regression-test verified, but a real failed-job end-to-end scenario is not claimed.
+- Supabase Advisor still reports one warning for the owner-checked authenticated `request_analysis_run_recheck(uuid)` SECURITY DEFINER function and two worker-queue RLS initialization-plan performance warnings. The owner identity check and worker-token/lease policy remain intact; do not remove these checks to silence warnings.
+- The new Preview deployment is confirmed READY by Vercel metadata. This audit did not claim a fresh public HTTP smoke test because direct requests to the protected Vercel hostname were not accessible through the available inspection path.
+
+### Remaining external/operator acceptance gates
+
+1. Use two owner-controlled email accounts to test Magic Link sign-in, run submission, My Runs restoration and cross-account denial on the exact-head Preview. Configure custom SMTP before public sign-ups.
+2. Run the real AppEEARS task creation / saved-task-ID resume / later result-revision flow; confirm no duplicate task POSTs and no unverified source is called final.
+3. Dispatch the 2025 nine-point SMAP pilot after PR #2's workflow registration is approved and merged to the default branch; validate every daily interval, both soil-moisture bands, private Drive read-back and SHA-256. The manual POWER history workflow already on `main` can backfill 2016–2024 against the feature branch; confirm exact per-year coverage before claiming ten-year daily history.
+4. Complete Bangladesh crop-calendar, soil, yield/price and field-trial calibration with qualified agronomist review. The crop/soil recommendations remain a Mymensingh pilot.
+5. Provision and validate a separate Production Supabase/Auth/worker environment, migration history, redirect allowlist, secrets and scheduled worker. Keep Production unchanged until those gates pass and the owner explicitly approves release.
