@@ -338,11 +338,14 @@ def integration_status() -> dict[str, Any]:
         "account_storage": {
             "configured": bool(supabase_auth.settings()["configured"]),
             "auth_provider": "email_magic_link",
-            "saved_runs": "supabase_postgres",
+            "saved_runs": "supabase_postgres_owner_metadata_and_transactional_queue",
+            "result_archive_provider": "google_drive" if google_drive.configured() else "not_configured",
         },
         "analysis_state": {
-            "storage": "supabase_queue_and_versioned_postgres_results_for_signed_in_runs",
-            "completed_signed_in_runs_durable_across_instances": bool(supabase_auth.settings()["configured"]),
+            "storage": "google_drive_private_dataset_and_analysis_result_archives_with_small_supabase_metadata",
+            "completed_signed_in_runs_durable_across_instances": bool(
+                supabase_auth.settings()["configured"] and worker_is_configured() and google_drive.configured()
+            ),
             "active_execution_durable_across_instances": bool(
                 supabase_auth.settings()["configured"] and worker_is_configured()
             ),
