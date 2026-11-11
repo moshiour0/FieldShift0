@@ -512,7 +512,7 @@ def test_appeears_hls_vi_scale_factor_and_valid_range_are_applied():
 def test_appeears_cached_hls_values_are_sanitized_before_use():
     rows = appeears._remote_rows([{
         "d": "2025-01-01",
-        "ndvi": -16999.0,
+        "ndvi": -9999.0,
         "ndmi": 4250.0,
         "evi": 0.62,
         "source": "NASA AppEEARS point sample: NASA HLS",
