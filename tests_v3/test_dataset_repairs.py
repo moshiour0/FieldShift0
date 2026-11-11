@@ -480,6 +480,58 @@ def test_nex_uses_cached_historical_normals_for_second_scenario(monkeypatch, tmp
     assert first.monthly[1]["tasmax_delta_c"] == 2
 
 
+def test_appeears_hls_vi_scale_factor_and_valid_range_are_applied():
+    selections = (
+        appeears.LayerSelection("hls_vi", "NASA HLS", "HLSS30_VI.020", "NDVI", "ndvi", "30m", "daily"),
+        appeears.LayerSelection("hls_vi", "NASA HLS", "HLSS30_VI.020", "EVI", "evi", "30m", "daily"),
+        appeears.LayerSelection("hls_vi", "NASA HLS", "HLSS30_VI.020", "NDMI", "ndmi", "30m", "daily"),
+    )
+    csv_text = (
+        "Date,HLSS30_VI_020_NDVI,HLSS30_VI_020_EVI,HLSS30_VI_020_NDMI\n"
+        "2025-01-01,6500,0.64,-1250\n"
+        "2025-01-02,-16999,1.5,-12000\n"
+        "2025-01-03,10000,-10000,5000\n"
+    )
+    rows = appeears._records_from_csv_files(
+        [("field-HLSS30_VI-020-results.csv", csv_text.encode())],
+        selections,
+        "2025-01-16T00:00:00+00:00",
+        START,
+        END,
+    )
+    by_date = {row.d: row for row in rows}
+    assert set(by_date) == {date(2025, 1, 1), date(2025, 1, 3)}
+    assert by_date[date(2025, 1, 1)].ndvi == pytest.approx(0.65)
+    assert by_date[date(2025, 1, 1)].evi == pytest.approx(0.64)
+    assert by_date[date(2025, 1, 1)].ndmi == pytest.approx(-0.125)
+    assert by_date[date(2025, 1, 3)].ndvi == pytest.approx(1.0)
+    assert by_date[date(2025, 1, 3)].evi == pytest.approx(-1.0)
+    assert by_date[date(2025, 1, 3)].ndmi == pytest.approx(0.5)
+
+
+def test_appeears_cached_hls_values_are_sanitized_before_use():
+    rows = appeears._remote_rows([{
+        "d": "2025-01-01",
+        "ndvi": -9999.0,
+        "ndmi": 4250.0,
+        "evi": 0.62,
+        "source": "NASA AppEEARS point sample: NASA HLS",
+    }])
+    assert rows[0].ndvi is None
+    assert rows[0].ndmi == pytest.approx(0.425)
+    assert rows[0].evi == pytest.approx(0.62)
+
+
+def test_hls_shared_cache_processing_version_invalidates_previous_unscaled_values():
+    selections = (
+        appeears.LayerSelection("hls_vi", "NASA HLS", "HLSS30_VI.020", "NDVI", "ndvi", "30m", "daily"),
+    )
+    identity = appeears._cache_identity(
+        "hls_vi", 24.75, 90.41, START, END, START, END, selections,
+    )
+    assert identity["qa_processing_version"] == "fieldshift-appeears-qa-v2-hls-scale-range"
+
+
 def test_provider_error_redacts_secrets(monkeypatch):
     monkeypatch.setenv("FIELD_SHIFT_APPEEARS_PASSWORD", "secret-pass")
     value = safe_error(RuntimeError("HTTP 403 secret-pass Bearer abc user@example.com projects/private-project"))

@@ -4,10 +4,10 @@
 > **Last updated:** 2026-11-12 (Asia/Dhaka)  
 > **Repository:** moshiour0/FieldShift0  
 > **Production branch:** `main`  
-> **Merged release:** PR #1 and PR #4; see current handoff  
+> **Merged release:** PR #1, PR #4 and PR #6; see current handoff  
 > **Production rule:** Production is already released. Do not follow earlier Preview-only deployment instructions.
 
-> **Current release status — 12 November 2026:** the project is released on `main` at `15b216b2d8379f4d18ccae0a5603739214e4ffac`; PR #4's Google Drive result archive and status-only polling changes are merged, and Production is READY. The earlier implementation notes below are retained as history. For current operational truth and remaining acceptance gates, follow [Final Owner Handoff — 12 November 2026](FINAL_HANDOFF_2026-11-12.md).
+> **Current release status — 12 November 2026:** Production is READY on `main` at `456ef50920b6c0518d536becea042aa19d32acbe` (PR #6 merge). Supabase contains 2 authenticated runs, 9 result revisions, 24 evidence-source records and 9 events; the two current result pointers are valid, but the runs remain preliminary while provider evidence is pending. The HLS-VI scale/fill correction and cache invalidation are under review in `fix/hls-vi-scale-fill-guard-2026-11-12`; do not trust previous HLS means until the fix is deployed and a fresh point sample is checked. The earlier implementation notes below are retained as history. For current operational truth and acceptance gates, follow [Final Owner Handoff — 12 November 2026](FINAL_HANDOFF_2026-11-12.md) and [Challenge Readiness Audit](CHALLENGE_READINESS_AUDIT_2026-11-12.md).
 
 
 ## 0. Historical operational checkpoint — 2026-11-10 15:40 UTC (superseded by the current release status above)

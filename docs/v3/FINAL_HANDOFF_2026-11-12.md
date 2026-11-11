@@ -3,10 +3,10 @@
 **Last verified:** 12 November 2026 (Asia/Dhaka)  
 **Repository:** `moshiour0/FieldShift0`  
 **Production branch:** `main`  
-**Latest merged change:** PR #4 — [Supabase egress reduction and Google Drive result archive](https://github.com/moshiour0/FieldShift0/pull/4)  
-**Main release SHA:** `15b216b2d8379f4d18ccae0a5603739214e4ffac`  
+**Latest merged change:** PR #6 — [Fix FieldShift result loading and preserve field inputs](https://github.com/moshiour0/FieldShift0/pull/6)  
+**Main release SHA:** `456ef50920b6c0518d536becea042aa19d32acbe`  
 **Stable Production URL:** https://field-shift0.vercel.app  
-**Current Production deployment:** `dpl_2VS5Xh3iBHWx6LrG6ve9w6KquK8h` — READY, exact main SHA above  
+**Current Production deployment:** `dpl_ABfXZhQpny7UkxfBvcpWGs4CsPJb` — READY, exact main SHA above  
 **Supabase:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · Free plan · ACTIVE_HEALTHY  
 **Budget rule:** remain on existing Free/Hobby resources; no paid SMTP, plan upgrade, extra database, or new storage billing.
 
@@ -14,13 +14,13 @@
 
 ## 1. Release decision
 
-The FieldShift0 application and PR #4's egress/storage changes are merged and live in Production. The current Production deployment is READY on the exact `main` SHA. The core code release is complete.
+The FieldShift0 application, PR #4's egress/storage changes, and PR #6's result-pointer/field-input repairs are merged and live in Production. The current Production deployment is READY on exact `main` SHA `456ef50920b6c0518d536becea042aa19d32acbe`.
 
-The project is **not yet fully accepted as an end-to-end live-data service**. A human-controlled Auth redirect check, a real sign-in, a real signed-in analysis, and data-archive completion remain unverified. Do not describe those operator gates as completed.
+The project is **not yet fully accepted as an end-to-end live-data service or field-validated agronomy product**. Two authenticated runs and their preliminary result revisions now exist, and their latest-result pointers are consistent. The runs are still waiting for provider data; a full Drive result restore after a fresh sign-in, national data archive completion, and agronomic field validation remain open. Do not describe those gates as complete.
 
 ## 2. Live Production verification
 
-The stable Production alias was checked on 12 November:
+The stable Production alias was checked after PR #6 was merged on 12 November:
 
 | Endpoint | Result | What it proves |
 |---|---:|---|
@@ -28,6 +28,11 @@ The stable Production alias was checked on 12 November:
 | `GET /health` | HTTP 200 | Engine reports `3.0.0`; product reports `3.3.0` |
 | `GET /api/status` | HTTP 200 | Integration/configuration status is readable |
 | `GET /api/auth/config` | HTTP 200 | Supabase email magic-link configuration is present |
+| `GET /api/v3/config` | HTTP 200 | V3 model weights are readable |
+| `GET /api/v3/demo` | HTTP 200 | Live engine endpoint responds; provider-specific data validation remains separate |
+| `GET /api/regions` | HTTP 200 | Region catalogue is readable; zones remain provisional, without official polygons |
+| `GET /school-game/` | HTTP 200 | School learning experience is served |
+| `GET /static/history.html` | HTTP 200 | Regional evidence explorer is served |
 
 The live `/api/status` response reports:
 
@@ -40,11 +45,11 @@ The live `/api/status` response reports:
 
 A public HTTP 200 or configured credential flag is not proof of a successful upstream provider call.
 
-## 3. PR #4 release contents
+## 3. PR #4 and PR #6 release contents
 
-PR #4 was merged to `main` as `15b216b2d8379f4d18ccae0a5603739214e4ffac`. Its post-merge GitHub CI run `43022770075` succeeded.
+PR #4 was merged to `main` as `15b216b2d8379f4d18ccae0a5603739214e4ffac`; its post-merge CI run succeeded. PR #6 was merged as `456ef50920b6c0518d536becea042aa19d32acbe`; both Python 3.11 and 3.12 CI jobs succeeded (run `43111044356`).
 
-The release includes:
+The PR #4 storage release includes:
 
 1. Full new signed-in analysis result JSON is written to private Google Drive objects. Supabase stores a compact object pointer, SHA-256 digest and byte count.
 2. A restored Drive result is checked against its SHA-256 digest. Historical inline result payloads remain readable; they are not bulk-migrated.
@@ -52,6 +57,14 @@ The release includes:
 4. A full detail read fetches only the current result revision, then restores its Drive object.
 5. The Drive adapter resolves only the requested private object/folder path. Drive is not used as a transactional queue, and files are not made public.
 6. The private Drive preflight uses the real adapter's put → get → byte/SHA-256 verification → delete path.
+
+PR #6 adds:
+
+1. A private `analysis_results` insert trigger keeps `analysis_runs.latest_result_id` synchronized with the current immutable revision. The migration also repairs existing rows with a missing pointer.
+2. Farmer-drawn field boundary geometry is persisted and validated as latitude/longitude vertices.
+3. The field-centre query location is aligned to the drawn polygon centroid; the UI labels the current satellite extraction as centre-point sampling, not a polygon-wide field average.
+4. Initial demo loading no longer resets the user's live field form inputs; queued-run summaries echo the submitted coordinate, area, date window, irrigation reliability and boundary state.
+5. The SMAP routing keeps Google Drive cache reads distinct from Earth Engine credentials and allows AppEEARS fallback when GEE is not configured.
 
 The PR's GitHub Actions private Drive preflight passed with the four repository secrets. That proves the GitHub Actions credential set and private folder supported the test at that time. It does **not** prove that the separately configured Vercel Production credentials have completed a round-trip.
 
@@ -69,15 +82,19 @@ Use this workflow to verify the GitHub Actions Drive credential set. Do **not** 
 
 ## 5. Supabase state and security
 
-The existing Free Supabase project is ACTIVE_HEALTHY and has 26 recorded migrations. A read-only check on 12 November found zero rows in:
+The existing Free Supabase project is ACTIVE_HEALTHY and has **27 recorded migrations**. Two real authenticated runs now exist. A read-only check after PR #6 found:
 
-- `public.analysis_runs`
-- `public.analysis_run_sources`
-- `public.analysis_results`
-- `public.analysis_run_events`
-- `private.analysis_run_jobs`
+| Table | Rows |
+|---|---:|
+| `public.analysis_runs` | 2 |
+| `public.analysis_run_sources` | 24 |
+| `public.analysis_results` | 9 |
+| `public.analysis_run_events` | 9 |
+| `private.analysis_run_jobs` | 2 |
 
-This means there is no real signed-in analysis run to use as an end-to-end persistence test yet. It does not mean the tables or queue are missing. No synthetic user/run was inserted as part of this handoff.
+Both runs have a non-null `latest_result_id` that points to the current result revision; the mismatch count is **0**. This verifies the result-pointer repair against real run rows. No synthetic user/run was inserted.
+
+Both runs remain `preliminary_ready` at `waiting_for_datasets` with jobs `retrying` because provider evidence is incomplete. The cron worker has been running successfully, but those runs are not final results.
 
 Supabase Advisor currently reports:
 
@@ -85,20 +102,20 @@ Supabase Advisor currently reports:
 - Leaked-password protection is disabled. Enable it in Supabase Auth security settings when practical; this is a security-hardening item, not evidence that magic-link configuration is absent.
 - Two worker-queue RLS initialization-plan performance warnings on `private.analysis_run_jobs`. Optimize only through a reviewed migration that preserves worker-token and active-lease checks.
 
-No database migration is required for PR #4's Drive pointer format. Existing inline result payloads remain supported.
+PR #6's pointer synchronization migration is present in the migration history as `sync_latest_analysis_result_pointer`. Existing inline result payloads remain supported. The Drive result archive still needs a real signed-in write/read/SHA-256 restore test.
 
 ## 6. Authentication: remaining owner action
 
-The live app reports Auth configuration present, but a complete browser sign-in has not been confirmed. The Supabase Management/Auth URL Configuration is not writable through the connected project tools.
+The live app reports Auth configuration present, and the two persisted analysis runs prove that authenticated requests have reached the owner-scoped queue. A fresh browser session, sign-out/sign-in continuity and My Runs restore have not yet been independently verified. Supabase Auth URL Configuration is not writable through the connected project tools.
 
 In Supabase Dashboard → **Authentication → URL Configuration**, set:
 
 - **Site URL:** `https://field-shift0.vercel.app`
-- **Redirect URL:** `https://field-shift0.vercel.app/**`
+- **Redirect URL:** `https://field-shift0.vercel.app/` (the current magic-link form sends `window.location.origin + window.location.pathname` from the root page; use this exact URL, not a broad wildcard).
 
-Save the settings. Then open the stable Production URL, use the already-confirmed email account, request a new sign-in link, and click that newest email link. Success is confirmed only when the browser returns to the Production site, `/api/auth/me` validates the bearer session, and the UI switches from **Sign in** to **My Runs**. Do not create another account just to repeat confirmation.
+Only change these settings if they are not already saved. Then open the stable Production URL, use the existing confirmed email account, request a new sign-in link and click the newest link. Verify `/api/auth/me` returns the authenticated user and the UI switches from **Sign in** to **My Runs**. Finally, reopen one of the existing runs after a fresh session. Do not create another account just to repeat confirmation.
 
-The sign-in UI now tells the user to allow the current site URL rather than referring incorrectly to a Preview URL. The UI text change is included in the final-operations change set.
+The sign-in UI tells the user to allow the current site URL rather than referring incorrectly to a Preview URL. The current redirect value sent by the form is the Production page origin/path.
 
 Supabase's default Free SMTP is testing-only and rate-limited; do not treat it as a public-launch email service. No paid SMTP provider has been configured.
 
@@ -106,19 +123,22 @@ Supabase's default Free SMTP is testing-only and rate-limited; do not treat it a
 
 - The nine 2025 NASA POWER reference-point daily archives were previously verified at 365/365 records each with complete coverage and SHA-256 provenance. These are gridded representative-point samples, not field sensors, farm coordinates, district averages or official AEZ means.
 - Full daily 2016–2025 coverage across all nine points is **not yet verified**. The 2016–2024 daily backfill must be dispatched and its per-region/per-year output audited before claiming a complete ten-year daily archive.
-- SMAP, HLS, MODIS MOD16 and GPM are not yet represented as validated nationwide archives. `not_archived` means no curated archive is available, not zero.
-- The 2025 nine-point SMAP pilot has not been proven complete. It must pass its daily interval, band, coverage and private Drive checksum checks before being called complete.
+- A real point analysis returned NASA POWER and SMAP daily observations plus HLS-VI observation dates, with some satellite cache objects stored in private Drive and SHA-256 verified. This is one point/time-window result, not a nationwide archive.
+- MODIS MOD16 returned no usable values after QA for that run; GPM was not configured; NEX-GDDP-CMIP6 projections were not available and its displayed scenarios remain labelled diagnostic stress tests; SoilGrids remained disabled.
+- A production audit found HLS-VI values outside the documented physical NDVI/EVI/NDMI range. The HLS parser/cache-version correction is being validated in the open follow-up PR; do not use previously cached HLS means as trusted measurements until that correction is deployed and a new sample is verified.
+- SMAP L4 values are assimilated geophysical estimates, not in-situ field moisture measurements. NASA POWER, SMAP and HLS outputs are centre-point samples at their native spatial/temporal support; they are not polygon-wide field averages.
 - Earth Engine access remains disabled by default until the owner has explicitly verified eligible non-commercial/research use and no paid Cloud billing/service path. Do not set the GEE opt-in flag just to make a status indicator green.
 - Current crop/soil guidance remains a Mymensingh-oriented pilot pending Bangladesh-local crop-calendar, soil, yield/price and field validation with qualified agronomist review. It is not a nationally calibrated agronomy prescription.
 
 ## 8. Exact remaining acceptance gates
 
-1. **Auth redirect:** save the two Supabase URL settings above and complete one real Production Magic Link login.
-2. **Drive Actions preflight:** after this change is merged, run **Verify Google Drive private archive** on `main`; require `provider=google_drive`, `status=ok`, `round_trip=verified`.
+1. **HLS correction:** merge the HLS scale/range/cache-invalidation fix only after CI passes; deploy it and verify a new sample has NDVI/EVI/NDMI within `[-1, 1]` or is reported missing.
+2. **Authenticated continuity and result restore:** complete a fresh Production sign-in, reopen an existing run, and verify that the full result is restored from private Google Drive with byte-count/SHA-256 checks.
 3. **Historical POWER:** run **Backfill nine-region NASA POWER daily history** from GitHub Actions with branch `main`, `start_year=2016`, `end_year=2025`. Confirm all 9×10 annual objects, expected daily counts, checksums and no silently substituted coordinates. A workflow starting is not completion.
-4. **First signed-in analysis:** submit one small, controlled analysis from the stable Production URL. Confirm the queue/worker, source states, result revision, private Drive object write/read/SHA-256 verification and My Runs restoration after sign-out/sign-in.
+4. **Auth settings:** verify Supabase Site URL and exact Production Redirect URL are saved; do not create a new account or change working settings unnecessarily.
 5. **Ownership isolation:** use a second owner-controlled account and confirm it cannot list, read or recheck the first account's run.
-6. **Provider acceptance:** validate AppEEARS task creation/resume and any requested satellite provider using actual returned task IDs and evidence. Do not infer live validation from `credentials_configured=true`.
+6. **Provider acceptance:** validate AppEEARS task creation/resume and each requested satellite provider using actual returned task IDs, product version, QA, date coverage and private cache integrity. Do not infer live validation from `credentials_configured=true`.
+7. **Agronomic validation:** attach locally sourced crop-calendar/yield/price and field soil observations, then validate against an independent holdout season/field before presenting the rankings as locally calibrated recommendations.
 
 ## 9. $0 operating rules
 
@@ -129,4 +149,4 @@ Supabase's default Free SMTP is testing-only and rate-limited; do not treat it a
 - Never put OAuth tokens, Google Drive folder IDs, worker secrets, Supabase service-role keys or email credentials in source control, public logs or chat.
 - Do not label an untested provider, data source or login path as complete.
 
-**Final status:** Production code release is complete and healthy. Operational acceptance is intentionally left open only for the human Auth setting/login, independent Drive checks, real signed-in run, provider verification and historical-data backfill listed above.
+**Final status:** Production code release PR #6 is merged and READY. Two authenticated runs and their current-result pointers are persisted correctly, but provider retries remain pending and HLS-VI scaling has a follow-up correction in validation. Full operational and scientific acceptance is still open for HLS redeployment/re-sampling, fresh-session result restoration, historical backfill, provider coverage, ownership isolation and Bangladesh field/a​​gronomic validation. See [NASA Space Apps Challenge Readiness Audit](CHALLENGE_READINESS_AUDIT_2026-11-12.md) for the evidence gates.

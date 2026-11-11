@@ -566,6 +566,7 @@ def _read_cache(path: Path, ttl: int) -> tuple[tuple[RemoteDay, ...] | None, flo
             row["d"] = date.fromisoformat(row["d"])
             if row.get("provenance"):
                 row["provenance"] = Provenance(**row["provenance"])
+            _normalise_cached_hls_row(row)
             out.append(RemoteDay(**row))
         statuses = envelope.get("dataset_statuses", {}) if isinstance(envelope, dict) else {}
         return tuple(out), age, statuses if isinstance(statuses, dict) else {}
@@ -599,7 +600,7 @@ def _cache_identity(
             for item in sorted(selections, key=lambda value: (value.product, value.layer, value.target))
         ],
         "schema_version": 1,
-        "qa_processing_version": "fieldshift-appeears-qa-v1",
+        "qa_processing_version": "fieldshift-appeears-qa-v2-hls-scale-range",
     }
 
 
@@ -619,6 +620,7 @@ def _remote_rows(rows: Any) -> tuple[RemoteDay, ...]:
         row["d"] = date.fromisoformat(row["d"])
         if row.get("provenance"):
             row["provenance"] = Provenance(**row["provenance"])
+        _normalise_cached_hls_row(row)
         output.append(RemoteDay(**row))
     return tuple(output)
 
@@ -734,6 +736,38 @@ def _field_value(row: dict[str, str], layer: str) -> float | None:
     return None
 
 
+def _hls_vi_value(value: float | None) -> float | None:
+    """Return an HLS vegetation index in physical units after product scaling.
+
+    NASA HLS-VI stores EVI/NDVI/NDMI as int16 with a 0.0001 scale factor
+    and a physical valid range of [-1, 1]. AppEEARS may expose either the
+    scaled physical value or the stored integer. Keep physical values as-is,
+    scale valid stored integers, and reject out-of-range/sentinel values.
+    """
+    if value is None or not math.isfinite(value):
+        return None
+    # NASA HLS-VI uses -9999 as its documented fill value. Reject known
+    # sentinel values before the integer scale-factor branch; otherwise -9999
+    # would be misread as a plausible physical index (-0.9999).
+    if value in {-9999.0, -19999.0, -32768.0, -16999.0, -999.0}:
+        return None
+    if -1.0 <= value <= 1.0:
+        return float(value)
+    if value.is_integer() and -10000.0 <= value <= 10000.0:
+        return float(value) * 0.0001
+    return None
+
+
+def _normalise_cached_hls_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Defensively normalise cached HLS fields before constructing RemoteDay."""
+    if "NASA HLS" not in str(row.get("source") or ""):
+        return row
+    for key in ("ndvi", "evi", "ndmi"):
+        if row.get(key) is not None:
+            row[key] = _hls_vi_value(float(row[key]))
+    return row
+
+
 def _quality_details(source_key: str, selections: tuple[LayerSelection, ...]) -> tuple[str, str]:
     selected = [x for x in selections if x.source_key == source_key]
     targets = {x.target for x in selected}
@@ -744,7 +778,7 @@ def _quality_details(source_key: str, selections: tuple[LayerSelection, ...]) ->
     if source_key == "hls_vi":
         if "hls_qa" in targets:
             return "applied", "HLS QA was decoded; cloud, cloud-adjacent, shadow, snow/ice, water, and highest-aerosol pixels were excluded."
-        return "provider_masked", "HLS VI processing masks cloud and cloud-shadow pixels; no separate HLS QA layer was returned to filter water, snow, or aerosol flags."
+        return "provider_masked", "HLS VI values were converted with the product 0.0001 scale factor where stored integers were returned and constrained to the physical [-1, 1] range; provider cloud/shadow masking applies, but no separate QA layer was returned to filter water, snow, or aerosol flags."
     if source_key == "smap":
         if "smap_qa" in targets and any(x.product.startswith("SPL3") for x in selected):
             return "applied", "SMAP retrieval_qual_flag was applied to L3 retrievals; only documented recommended-quality flags 0 or 8 were retained."
@@ -814,11 +848,17 @@ def _records_from_csv_files(
                         row_values.pop("modis_et_mm", None)
                 if any(x.source_key == "hls_vi" for x in selections):
                     hls_values = {k: v for k, v in row_values.items() if k in {"ndvi", "evi", "ndmi"}}
+                    for key, value in hls_values.items():
+                        physical_value = _hls_vi_value(value)
+                        if physical_value is None:
+                            row_values.pop(key, None)
+                        else:
+                            row_values[key] = physical_value
                     if "hls_qa" in row_values and not _hls_clear(row_values["hls_qa"]):
                         for key in hls_values:
                             row_values.pop(key, None)
-                    # Without the separate QA field, HLS VI cloud/shadow masking is
-                    # still provider-applied; ancillary water/snow/aerosol checks are disclosed.
+                    # HLS VI is scaled to physical [-1, 1] units before averaging.
+                    # Provider cloud/shadow masking still applies when no separate QA layer is returned.
                 values = grouped.setdefault(day, {})
                 for target, value in row_values.items():
                     if target.endswith(("_qa", "_qc")):
@@ -896,7 +936,7 @@ def _sample_source(
     requested_start, requested_end = start, end
     start = max([start] + [x.available_start for x in selections if x.available_start])
     end = min([end] + [x.available_end for x in selections if x.available_end])
-    signature = "v4|" + key + "|" + _cache_key(lat, lon, start, end) + "|" + "|".join(sorted(x.product + "/" + x.layer for x in selections))
+    signature = "v5|" + key + "|" + _cache_key(lat, lon, start, end) + "|" + "|".join(sorted(x.product + "/" + x.layer for x in selections))
     cache_key = hashlib.sha256(signature.encode()).hexdigest()[:24]
     cache_path, pending_path = _cache_paths(cache_dir, cache_key)
     task_name = "fieldshift-v4-" + key + "-" + cache_key
