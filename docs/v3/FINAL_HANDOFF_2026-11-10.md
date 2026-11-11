@@ -1,3 +1,5 @@
+> **Superseded historical handoff — 10 November 2026.** This snapshot is retained for the audit trail. The authoritative current state, including the 11 November worker lease and optional-pending status corrections, is in [Final Owner Handoff — 11 November 2026](FINAL_HANDOFF_2026-11-11.md). Do not use the deployment SHA, migration count, test count or outstanding-gate list below as the current release status.
+
 # KrishiNexus / FieldShift0 — Release Handoff
 
 **Prepared:** 2026-11-10 (Asia/Dhaka)  
