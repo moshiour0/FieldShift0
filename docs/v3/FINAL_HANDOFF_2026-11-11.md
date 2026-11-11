@@ -4,9 +4,10 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR #1:** [Open · Draft · Unmerged · Mergeable](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Current reviewed feature head:** `9adacb90cf06d2745226b39096bd46fe46de3ac4`  
-**Exact-head Preview:** https://field-shift0-e4qwww1wl.vercel.app  
-**Preview deployment:** `dpl_37RcoXzaANYhit4CDtaDiV94qQMD`  
+**Latest reviewed PR branch head:** `144fd68b2b83a5bce517eb594cd1c3527d811ad1`  
+**Verified runtime correction SHA:** `9adacb90cf06d2745226b39096bd46fe46de3ac4`  
+**Latest branch Preview:** https://field-shift0-cg0z270l2.vercel.app  
+**Preview deployment:** `dpl_qeSvFgYjf1MSzenXhr3w6Gj9nTzZ`  
 **Supabase Preview project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · `ap-south-1`  
 **Production:** deliberately not promoted; see the separate Production status below.
 
@@ -174,3 +175,10 @@ A further database/source comparison found that the full-function replacement in
 - Bangladesh crop calendar, soil, yield/price and field-trial calibration remain open; this is still a Mymensingh pilot, not a nationwide-calibrated agronomy service.
 
 **Release decision:** the exact feature Preview, CI and Preview database function contracts are now verified at commit `9adacb9`. The whole project is still **not Production-ready** until real account/provider/archive acceptance and separate Production Supabase/Auth/worker provisioning are completed.
+
+
+## 10. Documentation handoff checkpoint — 11 November 2026, 05:42 UTC
+
+The handoff, README, Data Foundation Operations and Persistent Analysis Roadmap now reflect the worker failure-path and optional-pending status corrections. The latest documentation-only branch head at this checkpoint is `144fd68b2b83a5bce517eb594cd1c3527d811ad1`; its Vercel Preview `dpl_qeSvFgYjf1MSzenXhr3w6Gj9nTzZ` is READY with the matching Git SHA. PR CI run #627 (`42967471847`) passed on Python 3.11 and 3.12; the application-code correction remains `9adacb90cf06d2745226b39096bd46fe46de3ac4` and its run #619 passed 187 tests in each Python matrix.
+
+The documentation refresh changes no runtime code, secrets, cloud ownership, database schema or Production setting. PR #1 remains Draft/Open/Unmerged. The exact end-to-end and Production release gates remain those listed in Sections 6 and 9.
