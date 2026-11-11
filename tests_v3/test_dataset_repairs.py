@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from dataclasses import asdict
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from fieldshift.api.app import app
-from fieldshift.v3 import appeears, gee, pipeline
+from fieldshift.v3 import appeears, gee, history, pipeline
 from fieldshift.v3.dates import evidence_dates
 from fieldshift.v3.diagnostics import safe_error
-from fieldshift.v3.models import RemoteDay
+from fieldshift.v3.models import Provenance, RemoteDay, WeatherDay
 
 START, END = date(2025, 1, 1), date(2025, 1, 15)
 PRODUCTS = [
@@ -103,16 +104,35 @@ def test_failed_smap_does_not_remove_hls_or_modis(nasa, tmp_path):
     assert "HTTP 400" in result.datasets[0]["error"]
 
 
-def test_pending_tasks_resume_after_serverless_cache_loss(nasa, tmp_path):
+def test_pending_tasks_resume_from_persisted_ids_after_serverless_cache_loss(nasa, tmp_path):
     nasa.pending = True
     first = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path / "cold1")
     assert {d["status"] for d in first.datasets} == {"pending"}
     assert all("resumes" in d["coverage"] for d in first.datasets)
+    saved_task_ids = {
+        {"NASA SMAP": "nasa_smap", "NASA MODIS MOD16": "nasa_modis_mod16", "NASA HLS": "nasa_hls"}[row["name"]]:
+            row["provider_task_id"]
+        for row in first.datasets
+    }
+    assert set(saved_task_ids) == {"nasa_smap", "nasa_modis_mod16", "nasa_hls"}
+    assert all(saved_task_ids.values())
+
+    # Simulate a new Vercel instance with no pending-task files or result cache.
+    # The task IDs persisted by the previous worker attempt must be sufficient.
     for task in nasa.tasks.values():
         task["status"] = "done"
-    second = appeears.appeears_point_timeseries(24.75, 90.41, START, END, cache_dir=tmp_path / "cold2")
+    second = appeears.appeears_point_timeseries(
+        24.75,
+        90.41,
+        START,
+        END,
+        cache_dir=tmp_path / "cold2",
+        existing_task_ids=saved_task_ids,
+    )
     assert len(nasa.payloads) == 3
     assert {d["status"] for d in second.datasets} == {"available"}
+    assert all(d["retrieval_mode"] == "live" for d in second.datasets)
+    assert nasa.calls.count(("task", "GET")) == 1
 
 
 def test_date_aware_modis_selection_avoids_expired_gap_filled_product(nasa):
@@ -126,6 +146,268 @@ def test_modis_sensor_bit_and_short_year_end_composite():
     raw = b"Date,ET_500m,ET_QC_500m\n2025-12-27,10,2\n"
     rows = appeears._records_from_csv_files([("modis.csv", raw)], selected, "test", date(2025, 12, 1), date(2025, 12, 31))
     assert rows[0].modis_et_mm == 2 and rows[0].modis_et_period_days == 5
+
+
+
+
+def test_smap_long_date_windows_use_reusable_366_day_chunks(monkeypatch, tmp_path):
+    calls = []
+
+    def chunk(lat, lon, start, end, cache_dir, *, allow_live_query=True):
+        calls.append((start, end))
+        expected = (end - start).days + 1
+        rows = tuple(
+            RemoteDay(date.fromordinal(start.toordinal() + offset), smap_surface_m3_m3=0.2,
+                      smap_rootzone_m3_m3=0.3, source="NASA SMAP test")
+            for offset in range(expected)
+        )
+        return gee.SMAPPointResult(
+            rows=rows, status="available", coverage_fraction=1.0,
+            retrieval_mode="google_drive_cache", archive_cache_status="verified",
+            archive_object_key=f"satellite-point-cache/chunk-{len(calls)}.json",
+            archive_sha256=(str(len(calls)) * 64),
+        )
+
+    monkeypatch.setattr(gee, "_smap_daily_point_timeseries_window", chunk)
+    start, end = date(2024, 1, 1), date(2025, 12, 31)
+    result = gee.smap_daily_point_timeseries(24.75, 90.41, start, end, tmp_path)
+
+    assert calls == [(date(2024, 1, 1), date(2024, 12, 31)),
+                     (date(2025, 1, 1), date(2025, 12, 31))]
+    assert len(result.rows) == 731
+    assert result.status == "available"
+    assert result.coverage_fraction == 1.0
+    assert result.chunk_count == 2
+    assert result.archive_cache_status == "verified"
+    assert result.archive_object_keys == (
+        "satellite-point-cache/chunk-1.json",
+        "satellite-point-cache/chunk-2.json",
+    )
+    assert result.archive_object_key is None
+    assert result.retrieval_mode == "google_drive_cache"
+
+
+
+def test_smap_year_cache_chunks_are_sliced_to_exact_user_window(monkeypatch, tmp_path):
+    calls = []
+
+    def year_chunk(lat, lon, start, end, cache_dir, *, allow_live_query=True):
+        calls.append((start, end))
+        count = (end - start).days + 1
+        rows = tuple(
+            RemoteDay(
+                date.fromordinal(start.toordinal() + offset),
+                smap_surface_m3_m3=0.22,
+                smap_rootzone_m3_m3=0.34,
+                source="NASA SMAP cached year",
+            )
+            for offset in range(count)
+        )
+        number = len(calls)
+        return gee.SMAPPointResult(
+            rows=rows,
+            status="available",
+            coverage_fraction=1.0,
+            retrieval_mode="google_drive_cache",
+            archive_cache_status="verified",
+            archive_object_key=f"satellite-point-cache/year-{start.year}.json",
+            archive_sha256=(str(number) * 64),
+        )
+
+    monkeypatch.setattr(gee, "_smap_daily_point_timeseries_window", year_chunk)
+    requested_start, requested_end = date(2024, 3, 1), date(2025, 6, 30)
+    result = gee.smap_daily_point_timeseries(
+        24.75, 90.41, requested_start, requested_end, tmp_path,
+    )
+
+    assert calls == [
+        (date(2024, 1, 1), date(2024, 12, 31)),
+        (date(2025, 1, 1), date(2025, 12, 31)),
+    ]
+    assert len(result.rows) == (requested_end - requested_start).days + 1
+    assert result.rows[0].d == requested_start
+    assert result.rows[-1].d == requested_end
+    assert all(requested_start <= row.d <= requested_end for row in result.rows)
+    assert result.status == "available"
+    assert result.archive_cache_status == "verified"
+    assert result.archive_object_keys == (
+        "satellite-point-cache/year-2024.json",
+        "satellite-point-cache/year-2025.json",
+    )
+
+
+def test_pipeline_checks_drive_smap_cache_when_gee_credentials_are_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: False)
+    monkeypatch.setattr(pipeline.google_drive, "configured", lambda: True)
+
+    cached_row = RemoteDay(
+        START,
+        smap_surface_m3_m3=0.23,
+        smap_rootzone_m3_m3=0.33,
+        source="NASA SMAP SPL4SMGP.008 via Google Earth Engine (shared cache)",
+    )
+    result = gee.SMAPPointResult(
+        rows=(cached_row,),
+        status="available",
+        coverage_fraction=1.0,
+        retrieval_mode="google_drive_cache",
+        archive_cache_status="verified",
+        archive_object_key="satellite-point-cache/v1/smap-gee/cache.json",
+        archive_object_keys=("satellite-point-cache/v1/smap-gee/cache.json",),
+        archive_sha256="b" * 64,
+    )
+    monkeypatch.setattr(pipeline, "smap_daily_point_timeseries", lambda *a, **k: result)
+    app_result = appeears.AppEEARSResult(
+        remote=(
+            RemoteDay(START, ndvi=0.58, source="NASA HLS"),
+            RemoteDay(START, modis_et_mm=1.9, source="NASA MODIS MOD16"),
+        ),
+        datasets=(
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    app_calls = []
+
+    def sampled_products(*args, **kwargs):
+        app_calls.append(kwargs)
+        return app_result
+
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", sampled_products)
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    remote = pipeline._load_optional_remote(
+        tmp_path, records, field, START, END, tmp_path, allow_live_smap=False,
+    )
+
+    smap = next(row for row in records if row["name"] == "NASA SMAP")
+    assert smap["status"] == "available"
+    assert smap["retrieval_mode"] == "google_drive_cache"
+    assert smap["archive_cache_status"] == "verified"
+    assert app_calls and app_calls[0]["source_keys"] == {"hls_vi", "modis_et"}
+    assert any(row.smap_surface_m3_m3 == pytest.approx(0.23) for row in remote)
+    assert any(row.ndvi == pytest.approx(0.58) for row in remote)
+
+
+def test_pipeline_uses_gee_smap_and_only_requests_hls_modis_from_appeears(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
+    smap_provenance = gee.Provenance(
+        source="NASA SMAP SPL4SMGP.008 via Google Earth Engine",
+        source_type="satellite",
+        temporal_resolution="3-hourly input aggregated to UTC daily mean; exactly 8 intervals required",
+        spatial_resolution="~11 km pixel",
+        citation="https://doi.org/10.5067/T5RUATAQREF8",
+        confidence=0.88,
+    )
+    smap_result = gee.SMAPPointResult(
+        rows=tuple(
+            RemoteDay(date.fromordinal(START.toordinal() + offset), smap_surface_m3_m3=0.25,
+                      smap_rootzone_m3_m3=0.32, source=smap_provenance.source, provenance=smap_provenance)
+            for offset in range((END - START).days + 1)
+        ),
+        status="available", coverage_fraction=1.0, retrieval_mode="google_earth_engine",
+        archive_cache_status="verified",
+        archive_object_key="satellite-point-cache/v1/smap-gee/test.json",
+        archive_sha256="a" * 64,
+    )
+    appeears_result = appeears.AppEEARSResult(
+        remote=(
+            RemoteDay(START, ndvi=0.6, source="NASA HLS"),
+            RemoteDay(START, modis_et_mm=2.0, source="NASA MODIS MOD16"),
+        ),
+        datasets=(
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    monkeypatch.setattr(pipeline, "smap_daily_point_timeseries", lambda *a, **k: smap_result)
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    appeears_calls = []
+    def sampled_products(*args, **kwargs):
+        appeears_calls.append(kwargs)
+        return appeears_result
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", sampled_products)
+    remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+    assert appeears_calls and appeears_calls[0]["source_keys"] == {"hls_vi", "modis_et"}
+    satellite = {row["name"]: row for row in records}
+    assert satellite["NASA SMAP"]["status"] == "available"
+    assert satellite["NASA SMAP"]["retrieval_mode"] == "google_earth_engine"
+    assert satellite["NASA SMAP"]["archive_cache_status"] == "verified"
+    assert "eight complete 3-hourly" in satellite["NASA SMAP"]["coverage"]
+    assert satellite["NASA HLS"]["status"] == "available"
+    assert satellite["NASA MODIS MOD16"]["status"] == "available"
+    assert any(row.smap_surface_m3_m3 == pytest.approx(0.25) for row in remote)
+    assert any(row.ndvi == pytest.approx(0.6) for row in remote)
+    assert any(row.modis_et_mm == pytest.approx(2.0) for row in remote)
+
+
+def test_initial_worker_defers_smap_even_when_only_appeears_is_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: False)
+    app_result = appeears.AppEEARSResult(
+        remote=(
+            RemoteDay(START, ndvi=0.61, source="NASA HLS"),
+            RemoteDay(START, modis_et_mm=2.1, source="NASA MODIS MOD16"),
+        ),
+        datasets=(
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    calls = []
+
+    def sampled_products(*args, **kwargs):
+        calls.append(kwargs)
+        return app_result
+
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", sampled_products)
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    remote = pipeline._load_optional_remote(
+        tmp_path, records, field, START, END, tmp_path, allow_live_smap=False,
+    )
+
+    assert calls and calls[0]["source_keys"] == {"hls_vi", "modis_et"}
+    smap = next(row for row in records if row["name"] == "NASA SMAP")
+    assert smap["status"] == "pending"
+    assert smap["retry_after_seconds"] == 900
+    assert "deferred" in smap["coverage"]
+    assert any(row.ndvi == pytest.approx(0.61) for row in remote)
+    assert any(row.modis_et_mm == pytest.approx(2.1) for row in remote)
+
+
+def test_pipeline_falls_back_to_appeears_when_gee_smap_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline, "credentials_configured", lambda: True)
+    monkeypatch.setattr(pipeline, "gee_credentials_configured", lambda: True)
+    monkeypatch.setattr(
+        pipeline, "smap_daily_point_timeseries",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("GEE temporarily unavailable")),
+    )
+    app_result = appeears.AppEEARSResult(
+        remote=(RemoteDay(START, smap_surface_m3_m3=0.2, smap_rootzone_m3_m3=0.3, source="AppEEARS SMAP"),),
+        datasets=(
+            {"name": "NASA SMAP", "source_type": "satellite", "status": "available"},
+            {"name": "NASA HLS", "source_type": "satellite", "status": "available"},
+            {"name": "NASA MODIS MOD16", "source_type": "satellite", "status": "available"},
+        ),
+    )
+    appeears_calls = []
+    def fallback_products(*args, **kwargs):
+        appeears_calls.append(kwargs)
+        return app_result
+    monkeypatch.setattr(pipeline, "appeears_point_timeseries", fallback_products)
+    monkeypatch.setattr(pipeline, "gpm_daily_point_timeseries", lambda *a, **k: ())
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    records = []
+    remote = pipeline._load_optional_remote(tmp_path, records, field, START, END, tmp_path)
+    assert appeears_calls and appeears_calls[0]["source_keys"] is None
+    assert next(row for row in records if row["name"] == "NASA SMAP")["status"] == "available"
+    assert any(row.smap_surface_m3_m3 == pytest.approx(0.2) for row in remote)
 
 
 def test_gpm_has_one_evidence_entry_when_appeears_fails(monkeypatch, tmp_path):
@@ -235,6 +517,202 @@ def test_earth_engine_graphs_build_with_official_python_client(monkeypatch, tmp_
         case.tearDown()
 
 
+
+def test_initial_smap_cache_miss_returns_pending_without_live_gee(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+    monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+    monkeypatch.setattr(gee.google_drive, "configured", lambda: False)
+
+    def unexpected_live_query():
+        raise AssertionError("The initial cache-only worker attempt must not query Earth Engine")
+
+    monkeypatch.setattr(gee, "_initialise_ee", unexpected_live_query)
+    result = gee.smap_daily_point_timeseries(
+        24.75, 90.41, date(2025, 1, 1), date(2025, 1, 10), tmp_path,
+        allow_live_query=False,
+    )
+    assert result.status == "pending"
+    assert result.rows == ()
+    assert result.retry_after_seconds == 900
+    assert result.retrieval_mode == "cache_miss"
+    assert result.chunk_count == 1
+
+
+def test_smap_gee_daily_values_require_all_eight_intervals(monkeypatch, tmp_path):
+    import ee
+    import ee.apitestcase
+
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        monkeypatch.setattr(gee.google_drive, "configured", lambda: False)
+        graphs = []
+
+        def compute(expression):
+            graphs.append(json.dumps(ee.serializer.encode(expression)))
+            return {
+                "features": [
+                    {"properties": {
+                        "date": "2025-01-01", "sm_surface": 0.24,
+                        "sm_rootzone": 0.31, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                    {"properties": {
+                        "date": "2025-01-02", "sm_surface": 0.28,
+                        "sm_rootzone": 0.35, "n_surface": 8, "n_rootzone": 7,
+                    }},
+                ]
+            }
+
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        result = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 2), tmp_path)
+
+        assert result.status == "partial"
+        assert result.coverage_fraction == 0.5
+        assert len(result.rows) == 1
+        assert result.rows[0].smap_surface_m3_m3 == pytest.approx(0.24)
+        assert result.rows[0].smap_rootzone_m3_m3 == pytest.approx(0.31)
+        assert "8 intervals" in result.rows[0].provenance.temporal_resolution
+        assert len(graphs) == 1
+    finally:
+        case.tearDown()
+
+
+def test_partial_smap_year_is_not_archived_or_reused_as_a_complete_cache(monkeypatch, tmp_path):
+    import hashlib
+
+    import ee
+    import ee.apitestcase
+
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    objects: dict[str, bytes] = {}
+    calls = []
+    writes = []
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        monkeypatch.setattr(gee.google_drive, "configured", lambda: True)
+        monkeypatch.setattr(gee.google_drive, "get_object", lambda key: objects.get(key))
+
+        def put_object(key: str, content: bytes, *, sha256: str | None = None, mime_type: str = "application/json"):
+            writes.append(key)
+            assert sha256 == hashlib.sha256(content).hexdigest()
+            objects[key] = content
+            return {"id": key}
+
+        monkeypatch.setattr(gee.google_drive, "put_object", put_object)
+
+        def compute(expression):
+            calls.append(ee.serializer.encode(expression))
+            if len(calls) == 1:
+                features = [
+                    {"properties": {
+                        "date": "2025-01-01", "sm_surface": 0.24,
+                        "sm_rootzone": 0.31, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                    {"properties": {
+                        "date": "2025-01-02", "sm_surface": 0.28,
+                        "sm_rootzone": 0.35, "n_surface": 8, "n_rootzone": 7,
+                    }},
+                ]
+            else:
+                features = [
+                    {"properties": {
+                        "date": "2025-01-01", "sm_surface": 0.24,
+                        "sm_rootzone": 0.31, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                    {"properties": {
+                        "date": "2025-01-02", "sm_surface": 0.28,
+                        "sm_rootzone": 0.35, "n_surface": 8, "n_rootzone": 8,
+                    }},
+                ]
+            return {"features": features}
+
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        first = gee.smap_daily_point_timeseries(
+            24.75, 90.41, date(2025, 1, 1), date(2025, 1, 2), tmp_path,
+        )
+        assert first.status == "partial"
+        assert first.archive_cache_status == "not_configured"
+        assert not writes
+
+        # The stale local partial cache must not suppress another live query.
+        second = gee.smap_daily_point_timeseries(
+            24.75, 90.41, date(2025, 1, 1), date(2025, 1, 2), tmp_path,
+        )
+        assert second.status == "available"
+        assert len(second.rows) == 2
+        assert len(calls) == 2
+        assert not writes
+    finally:
+        case.tearDown()
+
+
+def test_smap_gee_completed_result_is_verified_in_drive_and_reused(monkeypatch, tmp_path):
+    import hashlib
+
+    import ee
+    import ee.apitestcase
+
+    case = ee.apitestcase.ApiTestCase()
+    case.setUp()
+    objects: dict[str, bytes] = {}
+    try:
+        monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
+        monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
+        monkeypatch.setattr(gee, "_initialise_ee", lambda: ee)
+        monkeypatch.setattr(gee.google_drive, "configured", lambda: True)
+        monkeypatch.setattr(gee.google_drive, "get_object", lambda key: objects.get(key))
+
+        def put_object(key: str, content: bytes, *, sha256: str | None = None, mime_type: str = "application/json"):
+            assert sha256 == hashlib.sha256(content).hexdigest()
+            objects[key] = content
+            return {"id": key}
+
+        monkeypatch.setattr(gee.google_drive, "put_object", put_object)
+        calls = []
+
+        def compute(expression):
+            calls.append(ee.serializer.encode(expression))
+            year_start = date(2025, 1, 1)
+            return {"features": [
+                {"properties": {
+                    "date": date.fromordinal(year_start.toordinal() + offset).isoformat(),
+                    "sm_surface": 0.27,
+                    "sm_rootzone": 0.36,
+                    "n_surface": 8,
+                    "n_rootzone": 8,
+                }}
+                for offset in range(365)
+            ]}
+
+        monkeypatch.setattr(ee.data, "computeValue", compute)
+        first = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 1), tmp_path / "first")
+        assert first.status == "available"
+        assert first.archive_cache_status == "verified"
+        assert first.archive_sha256
+        assert len(objects) == 1
+
+        def no_earth_engine():
+            raise AssertionError("A verified shared SMAP cache hit must not query Earth Engine")
+
+        monkeypatch.setattr(gee, "_initialise_ee", no_earth_engine)
+        # A verified Drive cache hit does not require live Earth Engine credentials.
+        monkeypatch.setattr(gee, "gee_credentials_configured", lambda: False)
+        second = gee.smap_daily_point_timeseries(24.75, 90.41, date(2025, 1, 1), date(2025, 1, 1), tmp_path / "cold")
+        assert second.status == "available"
+        assert second.retrieval_mode == "google_drive_cache"
+        assert second.archive_cache_status == "verified"
+        assert second.rows[0].smap_surface_m3_m3 == pytest.approx(0.27)
+        assert len(calls) == 1
+    finally:
+        case.tearDown()
+
+
 def test_nex_pending_can_resume_cached_months(monkeypatch, tmp_path):
     monkeypatch.setenv("FIELD_SHIFT_GEE_PROJECT", "test-project")
     monkeypatch.setenv("FIELD_SHIFT_GEE_SERVICE_ACCOUNT_JSON", "mock")
@@ -249,3 +727,179 @@ def test_nex_pending_can_resume_cached_months(monkeypatch, tmp_path):
     with patch.object(gee, "_fetch_normal_month", return_value=old) as fetch:
         completed = gee.nex_gddp_monthly_deltas(24.75, 90.41, "ssp245", tmp_path)
     assert completed.status == "live" and fetch.call_count == 23
+
+
+def test_archived_weather_details_validates_drive_payload_and_requires_exact_reference_point(monkeypatch, tmp_path):
+    region = history.region_by_id("mymensingh")
+    provenance = Provenance(
+        source="NASA POWER",
+        source_type="observed/model-derived",
+        retrieval_date="2026-11-09T06:43:22Z",
+        temporal_resolution="daily",
+        citation="https://power.larc.nasa.gov/docs/services/api/temporal/daily/",
+    )
+    rows = []
+    for offset in range(365):
+        day = date(2025, 1, 1) + timedelta(days=offset)
+        weather = WeatherDay(
+            d=day,
+            tmax_c=30.0,
+            tmin_c=22.0,
+            rh_mean_pct=70.0,
+            wind_2m_ms=1.0,
+            solar_rad_mj_m2_day=18.0,
+            rain_mm=0.5,
+            source="NASA POWER (live)",
+            provenance=provenance,
+        )
+        rows.append({**asdict(weather), "d": day.isoformat(), "provenance": asdict(provenance)})
+    payload = {
+        "schema_version": 1,
+        "region": region,
+        "year": 2025,
+        "archived_at": "2026-11-09T06:43:22Z",
+        "days": rows,
+        "sha256": history._digest(rows),
+        "source": "NASA POWER",
+        "citation": "https://power.larc.nasa.gov/docs/services/api/temporal/daily/",
+        "quality": "NASA POWER (live)",
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    calls = []
+    monkeypatch.setattr(history, "archive_dir", lambda: tmp_path)
+    monkeypatch.setattr(history.google_drive, "configured", lambda: True)
+    monkeypatch.setattr(history.google_drive, "get_object", lambda key: calls.append(key) or raw)
+
+    result = history.archived_weather_details(
+        24.75, 90.41, date(2025, 1, 1), date(2025, 1, 3),
+    )
+
+    assert result is not None
+    days, metadata, retrieval_mode = result
+    assert len(days) == 3
+    assert days[0].d == date(2025, 1, 1)
+    assert days[-1].d == date(2025, 1, 3)
+    assert "NASA POWER (archive)" in days[0].source
+    assert metadata[0]["sha256"] == payload["sha256"]
+    assert retrieval_mode == "google_drive_archive"
+    assert calls == ["power-history/mymensingh/2025.json"]
+
+    # A nearby anchor is never substituted for a farmer-selected coordinate.
+    assert history.archived_weather_details(
+        24.7501, 90.41, date(2025, 1, 1), date(2025, 1, 3),
+    ) is None
+    assert calls == ["power-history/mymensingh/2025.json"]
+
+
+def test_archived_weather_details_rejects_a_bad_embedded_checksum(monkeypatch, tmp_path):
+    region = history.region_by_id("mymensingh")
+    provenance = asdict(Provenance(source="NASA POWER", source_type="observed/model-derived"))
+    rows = []
+    for offset in range(365):
+        day = date(2025, 1, 1) + timedelta(days=offset)
+        rows.append({
+            "d": day.isoformat(),
+            "tmax_c": 30.0,
+            "tmin_c": 22.0,
+            "rh_mean_pct": 70.0,
+            "wind_2m_ms": 1.0,
+            "solar_rad_mj_m2_day": 18.0,
+            "rain_mm": 0.5,
+            "source": "NASA POWER (live)",
+            "provenance": provenance,
+        })
+    payload = {
+        "schema_version": 1,
+        "region": region,
+        "year": 2025,
+        "days": rows,
+        "sha256": "0" * 64,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    monkeypatch.setattr(history, "archive_dir", lambda: tmp_path)
+    monkeypatch.setattr(history.google_drive, "configured", lambda: True)
+    monkeypatch.setattr(history.google_drive, "get_object", lambda _key: raw)
+
+    assert history.archived_weather_details(
+        24.75, 90.41, date(2025, 1, 1), date(2025, 1, 3),
+    ) is None
+
+
+def test_power_baseline_prefers_verified_exact_coordinate_archive(monkeypatch, tmp_path):
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    rows = tuple(
+        WeatherDay(
+            d=date.fromordinal(START.toordinal() + offset),
+            tmax_c=30.0,
+            tmin_c=22.0,
+            rh_mean_pct=70.0,
+            wind_2m_ms=1.0,
+            solar_rad_mj_m2_day=18.0,
+            rain_mm=0.5,
+            source="NASA POWER (archive); original: NASA POWER (live)",
+            provenance=Provenance(source="NASA POWER", source_type="observed/model-derived"),
+        )
+        for offset in range((END - START).days + 1)
+    )
+    metadata = ({"year": 2025, "sha256": "a" * 64, "archived_at": "2026-11-09T06:43:22Z"},)
+    monkeypatch.setattr(
+        pipeline, "archived_weather_details",
+        lambda lat, lon, start, end: (rows, metadata, "google_drive_archive"),
+    )
+    monkeypatch.setattr(pipeline, "power_daily", lambda *args, **kwargs: pytest.fail("live POWER must not run on an archive hit"))
+
+    baseline, record = pipeline._load_power_baseline(field, START, END, tmp_path)
+
+    assert baseline == rows
+    assert record["retrieval_mode"] == "google_drive_archive"
+    assert record["quality_status"] == "checksum_verified"
+    assert record["archive_sha256s"] == ["a" * 64]
+    assert record["data_start_date"] == START.isoformat()
+    assert record["data_end_date"] == END.isoformat()
+
+
+def test_health_reports_consistent_product_engine_version():
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "engine": "3.0.0", "product": "3.3.0"}
+
+
+def test_power_baseline_keeps_unarchived_field_on_its_own_live_coordinate(monkeypatch, tmp_path):
+    field = pipeline.build_field(pipeline.load_config(), pipeline.DEFAULT_WEIGHTS)
+    field.lat = 24.751
+    field.lon = 90.412
+    archive_calls = []
+    live_calls = []
+    provenance = Provenance(source="NASA POWER", source_type="observed/model-derived")
+    rows = tuple(
+        WeatherDay(
+            d=date.fromordinal(START.toordinal() + offset),
+            tmax_c=30.0,
+            tmin_c=22.0,
+            rh_mean_pct=70.0,
+            wind_2m_ms=1.0,
+            solar_rad_mj_m2_day=18.0,
+            rain_mm=0.5,
+            source="NASA POWER (live)",
+            provenance=provenance,
+        )
+        for offset in range((END - START).days + 1)
+    )
+
+    def archive_lookup(lat, lon, start, end):
+        archive_calls.append((lat, lon, start, end))
+
+    def live_lookup(lat, lon, start, end, **kwargs):
+        live_calls.append((lat, lon, start, end))
+        return rows
+
+    monkeypatch.setattr(pipeline, "archived_weather_details", archive_lookup)
+    monkeypatch.setattr(pipeline, "power_daily", live_lookup)
+
+    baseline, record = pipeline._load_power_baseline(field, START, END, tmp_path)
+
+    assert baseline == rows
+    assert archive_calls == [(24.751, 90.412, START, END)]
+    assert live_calls == [(24.751, 90.412, START, END)]
+    assert record["retrieval_mode"] == "live"
+    assert record["quality_status"] if "quality_status" in record else record["source"] == "NASA POWER"

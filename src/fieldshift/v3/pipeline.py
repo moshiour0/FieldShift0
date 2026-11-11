@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from . import google_drive
 from .appeears import appeears_point_timeseries, credentials_configured
 from .dates import evidence_dates
 from .diagnostics import safe_error
@@ -25,7 +26,9 @@ from .gee import (
     gpm_daily_point_timeseries,
     nex_gddp_monthly_deltas,
     nex_models,
+    smap_daily_point_timeseries,
 )
+from .history import archived_weather_details
 from .indicators import compute_rotation_indicators
 from .models import (
     CropV2,
@@ -214,6 +217,8 @@ def _load_optional_remote(
     end: dt.date,
     cache_dir: Path,
     allow_live: bool = True,
+    provider_task_ids: dict[str, str] | None = None,
+    allow_live_smap: bool = True,
 ) -> tuple:
     remote: list[Any] = []
     loaders = [
@@ -253,6 +258,75 @@ def _load_optional_remote(
                     f"for automatic point sampling, or provide {p.as_posix()} using its documented CSV schema."
                 ),
             })
+    use_gee_smap = False
+    if allow_live and start <= end and (gee_credentials_configured() or google_drive.configured()):
+        existing_smap = next(
+            (row for row in datasets if row.get("name") == "NASA SMAP" and row.get("status") == "available"),
+            None,
+        )
+        if existing_smap is not None:
+            # A supplied QA-checked SMAP file already satisfies this source.
+            use_gee_smap = True
+        else:
+            datasets[:] = [row for row in datasets if not (
+                row.get("name") == "NASA SMAP" and row.get("status") == "not_configured"
+            )]
+            try:
+                smap_result = smap_daily_point_timeseries(
+                    field.lat, field.lon, start, end, cache_dir=cache_dir,
+                    allow_live_query=allow_live_smap,
+                )
+                remote.extend(smap_result.rows)
+                expected_smap_days = (end - start).days + 1
+                smap_provenance = smap_result.rows[0].provenance if smap_result.rows else None
+                smap_record = {
+                    "name": "NASA SMAP",
+                    "source_type": "satellite",
+                    "status": smap_result.status,
+                    "coverage": (
+                        f"{len(smap_result.rows)}/{expected_smap_days} requested daily values; "
+                        "each accepted value is the UTC mean of eight complete 3-hourly SMAP L4 intervals."
+                    ),
+                    "coverage_fraction": smap_result.coverage_fraction,
+                    "retrieval_mode": smap_result.retrieval_mode,
+                    "data_start_date": smap_result.rows[0].d.isoformat() if smap_result.rows else None,
+                    "data_end_date": smap_result.rows[-1].d.isoformat() if smap_result.rows else None,
+                    "temporal_resolution": "3-hourly source aggregated to daily UTC mean (8/8 intervals required)",
+                    "spatial_resolution": "~11 km GEE pixel; native SMAP L4 grid ~9 km",
+                    "quality_status": "all_eight_intervals_present" if smap_result.status == "available" else "incomplete_date_coverage",
+                    "quality_note": (
+                        "No missing 3-hour intervals or days were imputed. SPL4SMGP.008 is an assimilated "
+                        "L4 geophysical estimate, not an in-situ farm sensor. The crop-water engine uses "
+                        "a SMAP root-zone observation only when one falls within seven days of planting; "
+                        "otherwise it uses the explicit 35% TAW initial-depletion default."
+                    ),
+                    "retry_after_seconds": smap_result.retry_after_seconds,
+                    "archive_cache_status": smap_result.archive_cache_status,
+                    "archive_object_key": smap_result.archive_object_key,
+                    "archive_object_keys": list(smap_result.archive_object_keys),
+                    "archive_chunk_count": smap_result.chunk_count,
+                    "archive_sha256": smap_result.archive_sha256,
+                    "citation": "https://doi.org/10.5067/T5RUATAQREF8",
+                    "provenance": asdict(smap_provenance) if smap_provenance else None,
+                }
+                datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
+                datasets.append(smap_record)
+                use_gee_smap = smap_result.status in {"available", "partial", "pending"}
+            except Exception as exc:
+                datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
+                datasets.append({
+                    "name": "NASA SMAP", "source_type": "satellite", "status": "unavailable",
+                    "error": safe_error(exc),
+                    "setup_hint": "Earth Engine SMAP query failed; exact-location AppEEARS fallback will be attempted when Earthdata credentials are configured.",
+                })
+
+    smap_deferred_by_worker = (
+        allow_live
+        and not allow_live_smap
+        and (gee_credentials_configured() or credentials_configured())
+        and not use_gee_smap
+    )
+
     if allow_live and credentials_configured() and start <= end:
         replace_names = {"NASA SMAP", "NASA HLS", "NASA MODIS MOD16"}
         datasets[:] = [
@@ -261,7 +335,13 @@ def _load_optional_remote(
         ]
         try:
             result = appeears_point_timeseries(
-                field.lat, field.lon, start, end, cache_dir=cache_dir,
+                field.lat,
+                field.lon,
+                start,
+                end,
+                cache_dir=cache_dir,
+                existing_task_ids=provider_task_ids,
+                source_keys={"hls_vi", "modis_et"} if (use_gee_smap or smap_deferred_by_worker) else None,
             )
             remote.extend(result.remote)
             for record in result.datasets:
@@ -272,6 +352,20 @@ def _load_optional_remote(
                     continue
                 datasets[:] = [r for r in datasets if r.get("name") != record["name"]]
                 datasets.append(record)
+            if smap_deferred_by_worker:
+                datasets[:] = [row for row in datasets if row.get("name") != "NASA SMAP"]
+                datasets.append({
+                    "name": "NASA SMAP",
+                    "source_type": "satellite",
+                    "status": "pending",
+                    "coverage": "SMAP acquisition is deferred on the initial worker passes so the first useful analysis is not blocked by its long provider tail. A later worker attempt will query GEE or the exact-location AppEEARS fallback.",
+                    "retry_after_seconds": 900,
+                    "temporal_resolution": "3-hourly source, daily UTC mean; both moisture bands require 8/8 intervals",
+                    "spatial_resolution": "~11 km GEE pixel; native SMAP L4 grid ~9 km",
+                    "quality_status": "not_yet_measured",
+                    "quality_note": "No SMAP values were substituted or treated as zero. This source is pending, not absent soil moisture.",
+                    "citation": "https://doi.org/10.5067/T5RUATAQREF8",
+                })
         except Exception as exc:
             for name in sorted(replace_names):
                 existing = next((r for r in datasets if r.get("name") == name and r.get("status") == "available"), None)
@@ -350,7 +444,67 @@ def _merge_remote(rows) -> tuple:
     return tuple(sorted(by.values(), key=lambda x: x.d))
 
 
-def load_scenarios(field: FieldV2, year: int, input_dir: Path | None, datasets: list[dict], *, start_date=None, end_date=None) -> list[Scenario]:
+def _load_power_baseline(
+    field: FieldV2,
+    start: dt.date,
+    end: dt.date,
+    cache_dir: Path,
+) -> tuple[tuple[WeatherDay, ...], dict[str, Any]]:
+    """Prefer a checksum-validated exact-point archive before making a live POWER request."""
+    archived = archived_weather_details(field.lat, field.lon, start, end)
+    if archived is not None:
+        days, archive_years, retrieval_mode = archived
+        record = dataset_record(
+            "NASA POWER Daily weather",
+            days[0].provenance,
+            f"{len(days)} daily records, {days[0].d.isoformat()} to {days[-1].d.isoformat()}; exact-point annual archive",
+        )
+        record.update({
+            "data_start_date": days[0].d.isoformat(),
+            "data_end_date": days[-1].d.isoformat(),
+            "retrieval_mode": retrieval_mode,
+            "quality_status": "checksum_verified",
+            "quality_note": (
+                "The exact representative-point archive passed annual identity, embedded SHA-256, "
+                "daily continuity and physical-bound checks at read time."
+            ),
+            "archive_years": list(archive_years),
+            "archive_sha256s": [item["sha256"] for item in archive_years],
+            "coverage_fraction": 1.0,
+        })
+        return days, record
+
+    baseline = power_daily(field.lat, field.lon, start, end, timeout=20, retries=2, cache_dir=cache_dir)
+    source = baseline[0].source
+    record = dataset_record(
+        "NASA POWER Daily weather",
+        baseline[0].provenance,
+        f"{len(baseline)} daily records, {baseline[0].d.isoformat()} to {baseline[-1].d.isoformat()}; {source}",
+    )
+    record["data_start_date"] = baseline[0].d.isoformat()
+    record["data_end_date"] = baseline[-1].d.isoformat()
+    record["retrieval_mode"] = (
+        "stale-cache" if "(stale-cache;" in source else
+        "cache" if "(cache" in source else
+        "live" if "(live" in source else "unknown"
+    )
+    if record["retrieval_mode"] == "stale-cache":
+        record["status"] = "stale"
+        record["fallback"] = "NASA was temporarily unavailable; a clearly marked cached NASA record was used"
+    return baseline, record
+
+
+def load_scenarios(
+    field: FieldV2,
+    year: int,
+    input_dir: Path | None,
+    datasets: list[dict],
+    *,
+    start_date=None,
+    end_date=None,
+    provider_task_ids: dict[str, str] | None = None,
+    allow_live_smap: bool = True,
+) -> list[Scenario]:
     observation_start, observation_end = evidence_dates(start_date, end_date, year=year)
     input_dir = input_dir or (ROOT / "data" / "v3")
     try:
@@ -369,23 +523,7 @@ def load_scenarios(field: FieldV2, year: int, input_dir: Path | None, datasets: 
         if request_start <= request_end:
             try:
                 cache_dir = Path(os.getenv("FIELD_SHIFT_CACHE_DIR", str(input_dir / "cache")))
-                baseline = power_daily(field.lat, field.lon, request_start, request_end, timeout=20, retries=2, cache_dir=cache_dir)
-                source = baseline[0].source
-                record = dataset_record(
-                    "NASA POWER Daily weather",
-                    baseline[0].provenance,
-                    f"{len(baseline)} daily records, {baseline[0].d.isoformat()} to {baseline[-1].d.isoformat()}; {source}",
-                )
-                record["data_start_date"] = baseline[0].d.isoformat()
-                record["data_end_date"] = baseline[-1].d.isoformat()
-                record["retrieval_mode"] = (
-                    "stale-cache" if "(stale-cache;" in source else
-                    "cache" if "(cache" in source else
-                    "live" if "(live" in source else "unknown"
-                )
-                if record["retrieval_mode"] == "stale-cache":
-                    record["status"] = "stale"
-                    record["fallback"] = "NASA was temporarily unavailable; a clearly marked cached NASA record was used"
+                baseline, record = _load_power_baseline(field, request_start, request_end, cache_dir)
                 datasets.append(record)
             except Exception as exc:
                 datasets.append({
@@ -433,7 +571,15 @@ def load_scenarios(field: FieldV2, year: int, input_dir: Path | None, datasets: 
     satellite_start, satellite_end = observation_start, observation_end
     satellite_cache_dir = Path(os.getenv("FIELD_SHIFT_CACHE_DIR", str(input_dir / "cache")))
     remote_rows = _load_optional_remote(
-        input_dir, datasets, field, satellite_start, satellite_end, satellite_cache_dir, allow_live=nasa_ok,
+        input_dir,
+        datasets,
+        field,
+        satellite_start,
+        satellite_end,
+        satellite_cache_dir,
+        allow_live=nasa_ok,
+        provider_task_ids=provider_task_ids,
+        allow_live_smap=allow_live_smap,
     )
     remote = _merge_remote(remote_rows)
     baseline_scenario = Scenario(
@@ -672,6 +818,8 @@ def run_v3(
     field_override: dict[str, Any] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    provider_task_ids: dict[str, str] | None = None,
+    allow_live_smap: bool = True,
 ) -> EngineRun:
     observation_start, observation_end = evidence_dates(start_date, end_date, year=year)
     if start_date is not None:
@@ -829,7 +977,16 @@ def run_v3(
                 "fallback": "Enter a soil-test report or a clearly labeled field estimate; the model uses generic physical defaults for missing properties",
             })
 
-    scenarios = load_scenarios(field, year, input_dir, datasets, start_date=observation_start, end_date=observation_end)
+    scenarios = load_scenarios(
+        field,
+        year,
+        input_dir,
+        datasets,
+        start_date=observation_start,
+        end_date=observation_end,
+        provider_task_ids=provider_task_ids,
+        allow_live_smap=allow_live_smap,
+    )
     rotations, rejected = _unique_rotations(crops, cfg, field, year)
     rotation_map = {r.rotation_id: r for r in rotations}
     indicator_matrix: dict[str, dict[str, list[float]]] = {s.name: {} for s in scenarios}
