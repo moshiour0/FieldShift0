@@ -62,6 +62,25 @@ class TestAPI(unittest.TestCase):
                 expected,
             )
 
+    def test_worker_durability_is_not_reported_when_drive_result_storage_is_missing(self):
+        c = TestClient(app)
+        env = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
+            "SUPABASE_ANON_KEY": "anon_test",
+            "FIELDSHIFT_WORKER_TOKEN": "w" * 56,
+            "GOOGLE_DRIVE_CLIENT_ID": "",
+            "GOOGLE_DRIVE_CLIENT_SECRET": "",
+            "GOOGLE_DRIVE_REFRESH_TOKEN": "",
+            "GOOGLE_DRIVE_FOLDER_ID": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            response = c.get("/api/status")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["account_storage"]["result_archive_provider"], "not_configured")
+        self.assertFalse(response.json()["analysis_state"]["completed_signed_in_runs_durable_across_instances"])
+        self.assertFalse(response.json()["analysis_state"]["active_execution_durable_across_instances"])
+
     def test_account_runs_requires_a_supabase_session(self):
         c = TestClient(app)
         response = c.get("/api/account/runs")
