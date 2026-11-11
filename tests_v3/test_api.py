@@ -24,6 +24,10 @@ class TestAPI(unittest.TestCase):
             "SUPABASE_URL": "https://example.supabase.co",
             "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test",
             "SUPABASE_ANON_KEY": "anon_test",
+            "GOOGLE_DRIVE_CLIENT_ID": "drive-client",
+            "GOOGLE_DRIVE_CLIENT_SECRET": "drive-secret",
+            "GOOGLE_DRIVE_REFRESH_TOKEN": "drive-refresh",
+            "GOOGLE_DRIVE_FOLDER_ID": "drive-folder",
             "FIELDSHIFT_WORKER_TOKEN": "",
             "FIELD_SHIFT_WORKER_SECRET": "x" * 48,
         }
