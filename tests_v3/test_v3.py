@@ -432,6 +432,19 @@ class TestV3NASAAndLineage(unittest.TestCase):
 
 
 class TestV3Engine(unittest.TestCase):
+    def test_user_drawn_field_polygon_is_preserved_and_validated(self):
+        cfg=load_config()
+        polygon=[[24.7500,90.4100],[24.7500,90.4120],[24.7520,90.4120],[24.7520,90.4100]]
+        field=build_field(cfg,DEFAULT_WEIGHTS,{"polygon":polygon,"area_ha":0.4})
+        self.assertEqual(field.polygon,[(24.75,90.41),(24.75,90.412),(24.752,90.412),(24.752,90.41)])
+        invalid=FieldV2(
+            "bad",24.75,90.41,0.4,
+            farmer=FarmerContext(priorities={"soil_health":1.0}),
+            polygon=[(24.75,90.41),(91.0,90.42),(24.76,90.43)],
+        )
+        with self.assertRaisesRegex(ValueError,"invalid latitude/longitude"):
+            invalid.validate()
+
     def test_full_engine_and_validation(self):
         run=run_v3(n_weight_samples=40,n_uncertainty_samples=16)
         self.assertEqual(run.engine_version,'3.0.0')
