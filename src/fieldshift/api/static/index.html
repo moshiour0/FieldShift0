@@ -503,8 +503,8 @@ function toggleDrawBoundary(){
       state.marker?.setLatLng({lat,lng:lon});
       state.map?.setView([lat,lon],Math.max(state.map.getZoom(),13));
       state.fieldPolygon?.setLatLngs(state.boundaryPoints);
-      qs('#fieldState').textContent=`Custom boundary saved · ${state.boundaryPoints.length} vertices · estimated area ${area.toFixed(3)} ha · satellite point sample at boundary centroid ${lat.toFixed(5)}, ${lon.toFixed(5)}.`;
       updateSoilState();
+      qs('#fieldState').textContent=`Custom boundary saved · ${state.boundaryPoints.length} vertices · estimated area ${area.toFixed(3)} ha · satellite point sample at boundary centroid ${lat.toFixed(5)}, ${lon.toFixed(5)}.`;
     }else{
       state.boundaryPoints=[];
       state.fieldPolygon?.setLatLngs(squareAround(Number(qs('#lat').value),Number(qs('#lon').value)));
