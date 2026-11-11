@@ -5,12 +5,12 @@ This runbook describes the reproducible NASA POWER daily point archive for the n
 ## Owner handoff checkpoint — 11 November 2026
 
 - Authoritative release record: [Final Owner Handoff](v3/FINAL_HANDOFF_2026-11-11.md).
-- Current feature branch SHA at the runtime validation checkpoint: `aac5f19f6da71bc7a0d6cf862a56e74e49915cc7`; exact Preview `https://field-shift0-2eee1evuc.vercel.app`.
-- CI #600 (push) and #601 (PR) passed Python 3.11/3.12: 184 tests each, Ruff, compileall and mypy. Workflow actions are pinned to immutable current Node 24 release commits.
+- Current reviewed feature head `9adacb90cf06d2745226b39096bd46fe46de3ac4`; exact Preview `https://field-shift0-e4qwww1wl.vercel.app` (READY, matching Git SHA).
+- Latest CI #619 (PR) passed Python 3.11/3.12: 187 tests each, one existing Starlette/httpx deprecation warning, Ruff, compileall and mypy. Workflow actions are pinned to immutable current Node 24 release commits.
 - 2025 NASA POWER is already complete and readable for all nine reference points (365/365, coverage 1.0, SHA-256). Years 2016–2024 are not yet proven daily.
 - SMAP/HLS/MODIS MOD16/GPM remain `not_archived`; the 2025 SMAP pilot is not yet run.
 - [PR #2](https://github.com/moshiour0/FieldShift0/pull/2) registers only the manual SMAP workflow; [PR #3](https://github.com/moshiour0/FieldShift0/pull/3) registers only weekly POWER refresh. Both remain Draft/Open/Unmerged. Workflow-only merges may trigger a Production redeploy because Vercel is connected to `main`.
-- Preview Supabase has 24 migrations. The worker lease/audit ordering fix is applied as `20261111040447_worker_event_before_lease_release_v2` and stored in the same-named repository migration file. The active worker cron returns successful idle ticks; no real user job is present.
+- Preview Supabase has 24 migrations. Worker lease/audit ordering and failure-path fixes are applied as `20261111040447_worker_event_before_lease_release_v2` and `20261111050822_worker_fail_event_before_lease_release`. A later full-function replacement had regressed optional-pending status; `20261111052954_worker_preserve_preliminary_status_with_active_lease` now restores `preliminary_ready` while retaining event-before-lease-release. The active worker cron returns successful idle ticks; no real user job is present. All seven checked account/run/source/result/event/job/cache/profile tables remain empty, so live owner-account acceptance remains outstanding.
 - Production is still on product 3.1.3 and reports `process_memory`; the durable Supabase/Auth/worker configuration is Preview-only. Do not promote until the separate Production migration/environment and human account acceptance gates pass.
 
 
@@ -111,3 +111,8 @@ An HTTP 200 alone is not proof of complete daily coverage. Inspect status, missi
 ## Scientific boundaries
 
 NASA POWER values are gridded representative-point samples, not field sensors, district averages, official AEZ means, or farm-specific observations. The existing Mymensingh 2016–2025 monthly aggregate remains a separate chart-only product. It is not converted into daily records. This POWER workflow does not ingest or validate SMAP, MODIS MOD16, HLS, or GPM archives. The SMAP workflow is currently present on PR #1's feature branch but absent from `main`. GitHub only exposes a manual `workflow_dispatch` workflow when its file exists on the default branch. A separate one-file Draft [PR #2](https://github.com/moshiour0/FieldShift0/pull/2) registers it; after explicit approval/merge, select `feat/krishinexus-real-data-school-lab` as the run ref and use `2025–2025` for the first pilot. The merge may trigger a Vercel Production redeploy. The pilot must pass Google Drive write/read/delete preflight, Earth Engine collection visibility, all nine region jobs, 365 days, eight valid 3-hourly intervals per day in both SMAP bands, remote Drive read-back and SHA-256 verification before any longer SMAP archive is started. Crop/soil recommendations remain a Mymensingh pilot pending Bangladesh field calibration.
+
+
+## Worker status / lease regression correction — 11 November 2026
+
+The latest Preview SQL read-back confirms the required/optional evidence contract: optional-only pending evidence with worker status `preliminary_ready` remains preliminary, while required pending evidence stays `waiting_for_data`. Both `worker_save_analysis()` and `worker_fail_analysis_job()` append their audit event before clearing the active lease. The matching branch migrations are in `supabase/migrations/`; the exact review checkpoint and open Production/account/data gates are in the [Final Owner Handoff](v3/FINAL_HANDOFF_2026-11-11.md).
