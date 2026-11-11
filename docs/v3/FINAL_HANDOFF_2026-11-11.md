@@ -4,10 +4,9 @@
 **Repository:** `moshiour0/FieldShift0`  
 **Working branch:** `feat/krishinexus-real-data-school-lab`  
 **PR #1:** [Open · Draft · Unmerged · Mergeable](https://github.com/moshiour0/FieldShift0/pull/1)  
-**Latest reviewed PR branch head:** `144fd68b2b83a5bce517eb594cd1c3527d811ad1`  
-**Verified runtime correction SHA:** `9adacb90cf06d2745226b39096bd46fe46de3ac4`  
-**Latest branch Preview:** https://field-shift0-cg0z270l2.vercel.app  
-**Preview deployment:** `dpl_qeSvFgYjf1MSzenXhr3w6Gj9nTzZ`  
+**Verified V3.3 runtime correction SHA:** `9adacb90cf06d2745226b39096bd46fe46de3ac4`  
+**Last confirmed READY runtime Preview:** https://field-shift0-e4qwww1wl.vercel.app  
+**Preview deployment:** `dpl_37RcoXzaANYhit4CDtaDiV94qQMD`  
 **Supabase Preview project:** `FieldShift0` · `bipyrlegaxmhwzwrmcmi` · `ap-south-1`  
 **Production:** deliberately not promoted; see the separate Production status below.
 
@@ -179,6 +178,11 @@ A further database/source comparison found that the full-function replacement in
 
 ## 10. Documentation handoff checkpoint — 11 November 2026, 05:42 UTC
 
-The handoff, README, Data Foundation Operations and Persistent Analysis Roadmap now reflect the worker failure-path and optional-pending status corrections. The latest documentation-only branch head at this checkpoint is `144fd68b2b83a5bce517eb594cd1c3527d811ad1`; its Vercel Preview `dpl_qeSvFgYjf1MSzenXhr3w6Gj9nTzZ` is READY with the matching Git SHA. PR CI run #627 (`42967471847`) passed on Python 3.11 and 3.12; the application-code correction remains `9adacb90cf06d2745226b39096bd46fe46de3ac4` and its run #619 passed 187 tests in each Python matrix.
+The handoff, README, Data Foundation Operations and Persistent Analysis Roadmap now reflect the worker failure-path and optional-pending status corrections. The latest documentation/operations checkpoint before this handoff refresh is commit `6b0b1d27cb665652ec0f5228b0846369eebcff4c`; its Vercel Preview `dpl_Awn39qMv7nu9FG4vWy3Bz4BXo5pt` is READY with the matching Git SHA. PR CI run #634 (`42968099190`) passed on Python 3.11 and 3.12: 187 tests in each matrix, the existing Starlette/httpx deprecation warning, Ruff, compileall and mypy. The application-code correction remains `9adacb90cf06d2745226b39096bd46fe46de3ac4`; docs/runbook commits do not change application code.
 
 The documentation refresh changes no runtime code, secrets, cloud ownership, database schema or Production setting. PR #1 remains Draft/Open/Unmerged. The exact end-to-end and Production release gates remain those listed in Sections 6 and 9.
+
+
+## 11. Repository governance note — 11 November 2026
+
+The default `main` branch is currently **not protected** and has no required status-check rules. CI runs are passing on PR #1, but GitHub does not currently enforce those checks as a merge requirement. Before a future Production release, configure a repository ruleset/branch protection that requires the FieldShift CI checks and review approval. The available GitHub connection can read this state but does not expose branch-protection mutation, so no repository protection setting was changed.
