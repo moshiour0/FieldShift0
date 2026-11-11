@@ -269,7 +269,7 @@ def _load_optional_remote(
                 ),
             })
     use_gee_smap = False
-    if allow_live and start <= end and (gee_credentials_configured() or google_drive.configured()):
+    if allow_live and start <= end and gee_credentials_configured():
         existing_smap = next(
             (row for row in datasets if row.get("name") == "NASA SMAP" and row.get("status") == "available"),
             None,
