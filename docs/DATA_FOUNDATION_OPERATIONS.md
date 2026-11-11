@@ -1,5 +1,8 @@
 # Data Foundation Operations
 
+> **Authoritative Production update — 12 November 2026:** PR #4 is merged to `main` at `15b216b2d8379f4d18ccae0a5603739214e4ffac`; Production deployment `dpl_2VS5Xh3iBHWx6LrG6ve9w6KquK8h` is READY at [field-shift0.vercel.app](https://field-shift0.vercel.app). New signed-in result JSON is archived as private Google Drive objects with SHA-256 verification; Supabase holds compact owner metadata and the transactional queue. The current live `/api/status` says Drive credentials are configured but `connection_tested=false`, so a real Vercel-hosted round-trip is still pending. The GitHub Actions PR preflight passed; a separate main-only **Verify Google Drive private archive** workflow is added in the current final-operations change set so operators can test Drive without triggering NASA ingestion. For the complete current release gates, use [Final Owner Handoff — 12 November](v3/FINAL_HANDOFF_2026-11-12.md). The dated checkpoints below are historical and must not override that handoff.
+
+
 This runbook describes the reproducible NASA POWER daily point archive for the nine configured Bangladesh reference points. It does not claim official AEZ zonal coverage, farm-level measurements, or satellite-product coverage.
 
 ## Owner handoff checkpoint — 11 November 2026
